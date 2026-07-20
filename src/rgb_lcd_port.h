@@ -34,7 +34,10 @@
  */
 #define EXAMPLE_LCD_H_RES               (1024)  ///< Horizontal resolution in pixels
 #define EXAMPLE_LCD_V_RES               (600)  ///< Vertical resolution in pixels
-#define EXAMPLE_LCD_PIXEL_CLOCK_HZ      (30 * 1000 * 1000) ///< Pixel clock frequency in Hz
+// 24 MHz (bajado desde 30): reduce la demanda de ancho de banda de la PSRAM
+// (menos "puntitos" por underrun del DMA) y da margen a la copia del frame
+// (menos brincoteo al actualizar). Si aparece parpadeo, subir de nuevo.
+#define EXAMPLE_LCD_PIXEL_CLOCK_HZ      (24 * 1000 * 1000) ///< Pixel clock frequency in Hz
 
 /**
  * @brief Color and Pixel Configuration
@@ -42,8 +45,14 @@
 #define EXAMPLE_LCD_BIT_PER_PIXEL       (16)   ///< Bits per pixel (color depth)
 #define EXAMPLE_RGB_BIT_PER_PIXEL       (16)   ///< RGB interface color depth
 #define EXAMPLE_RGB_DATA_WIDTH          (16)   ///< Data width for RGB interface
-#define EXAMPLE_LCD_RGB_BUFFER_NUMS     (2)    ///< Number of frame buffers for double buffering
-#define EXAMPLE_RGB_BOUNCE_BUFFER_SIZE  (EXAMPLE_LCD_H_RES * 10) ///< Size of bounce buffer for RGB data
+// 2 framebuffers (doble buffer): se dibuja sobre el buffer de atras (nunca el
+// que el panel esta leyendo) -> sin fantasmas/remanentes. El swap se hace en
+// vsync gracias a CONFIG_LCD_RGB_RESTART_IN_VSYNC=y (ver custom_sdkconfig en
+// platformio.ini) -> transicion limpia, sin "brinco" ni tearing.
+#define EXAMPLE_LCD_RGB_BUFFER_NUMS     (2)    ///< Number of frame buffers
+// Bounce buffer amplio: da margen ante picos de latencia de la PSRAM y evita
+// los "puntitos" blancos transitorios (underrun del DMA del panel).
+#define EXAMPLE_RGB_BOUNCE_BUFFER_SIZE  (EXAMPLE_LCD_H_RES * 20) ///< Size of bounce buffer for RGB data
 
 /**
  * @brief GPIO Pins for RGB LCD Signals

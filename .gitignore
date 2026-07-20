@@ -6,6 +6,14 @@ src/my_config.h
 .pioenvs/
 .piolibdeps/
 
+# Generados por el relink de pioarduino (custom_sdkconfig). Se recrean solos.
+.dummy/
+managed_components/
+dependencies.lock
+sdkconfig
+sdkconfig.*
+CMakeLists.txt
+
 # Editores / IDE
 .vscode/
 .idea/
