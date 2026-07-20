@@ -95,7 +95,7 @@ void setup()
 
     // BME280 local.
 #if BME280_ENABLED
-    initBME280(BME280_ADDRESS);
+    initBME280(BME280_I2C_ADDR);
 #endif
 
     // Red + buffer de imagen en PSRAM.

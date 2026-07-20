@@ -27,8 +27,9 @@
 // Touch GT911 (usa el bus I2C compartido; RST via CH422G, no GPIO)
 #define TOUCH_INT      4
 
-// BME280 (bus I2C compartido)
-#define BME280_ADDRESS 0x76
+// BME280 (bus I2C compartido). Nombre propio para no chocar con el macro
+// BME280_ADDRESS que define la libreria Adafruit.
+#define BME280_I2C_ADDR 0x76
 // Altitud del sitio en metros, para corregir la presion a nivel del mar.
 // CDMX ~2240 m. Ajustar segun tu ubicacion (o comentar para presion absoluta).
 #define BME280_ALTITUDE 2240
