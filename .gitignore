@@ -1,0 +1,17 @@
+# Credenciales (copiar desde my_config.h.template)
+src/my_config.h
+
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# Editores / IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# SO
+.DS_Store
+Thumbs.db

@@ -1,0 +1,45 @@
+/**
+ * my_config.h.template
+ *
+ * Copia este archivo a src/my_config.h y edita tus valores.
+ * src/my_config.h esta en .gitignore para proteger tus credenciales.
+ *
+ *   cp my_config.h.template src/my_config.h
+ */
+
+#ifndef MY_CONFIG_H
+#define MY_CONFIG_H
+
+// ============================================================================
+// WiFi (hasta 3 redes con fallback automatico; deja vacias las que no uses)
+// ============================================================================
+#define WIFI_SSID1      "TU_SSID"
+#define WIFI_PASSWORD1  "TU_PASSWORD"
+
+#define WIFI_SSID2      ""
+#define WIFI_PASSWORD2  ""
+
+#define WIFI_SSID3      ""
+#define WIFI_PASSWORD3  ""
+
+// ============================================================================
+// Servidor Ecowitt
+// ============================================================================
+// URL base (sin slash final). El firmware pedira:
+//   GET  {API_BASE_URL}/api/display.jpg?page=N
+//   POST {API_BASE_URL}/api/kiosk/local
+#define API_BASE_URL    "https://clima.xe1e.net"
+
+// Cada cuanto refrescar la imagen del display (ms). 60000 = 1 min.
+#define UPDATE_INTERVAL_MS  60000UL
+
+// ============================================================================
+// BME280 local (este display como sensor de la pagina 2)
+// ============================================================================
+// Poner en 0 para deshabilitar la lectura/envio del BME280.
+#define BME280_ENABLED  1
+
+// Intervalo de envio del BME280 al servidor, en segundos (minimo 60).
+#define REMOTE_STATION_INTERVAL  60
+
+#endif // MY_CONFIG_H
