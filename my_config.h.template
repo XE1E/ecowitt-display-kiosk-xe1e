@@ -28,7 +28,10 @@
 // URL base (sin slash final). El firmware pedira:
 //   GET  {API_BASE_URL}/api/display.jpg?page=N
 //   POST {API_BASE_URL}/api/kiosk/local
-#define API_BASE_URL    "https://clima.xe1e.net"
+// USAR HTTP (no HTTPS): el handshake TLS en el ESP32 tarda ~1-2s por peticion.
+// Con HTTP directo (por IP, puerto 8080) el cambio de pagina es casi instantaneo.
+// La imagen es publica y no hay secretos. Ej: "http://<IP_DEL_SERVIDOR>:8080"
+#define API_BASE_URL    "http://192.168.1.100:8080"
 
 // Cada cuanto refrescar la imagen del display (ms). 60000 = 1 min.
 #define UPDATE_INTERVAL_MS  60000UL

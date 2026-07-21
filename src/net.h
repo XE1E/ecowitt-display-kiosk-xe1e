@@ -5,8 +5,9 @@
  *  - GET del JPEG del display: /api/display.jpg?page=N  -> buffer en PSRAM.
  *  - POST del BME280 local:    /api/kiosk/local          (JSON).
  *
- * El servidor es HTTPS (Caddy). Usamos setInsecure() (sin validar cert): el
- * display es de solo lectura en una red de confianza y no maneja secretos.
+ * Se baja por HTTP (no HTTPS): el handshake TLS en el ESP32 tarda ~1-2s por
+ * peticion y hacia lentisimo el cambio de pagina. La imagen es publica y no hay
+ * secretos, asi que HTTP directo (puerto 8080 por IP) es ideal: ~40ms.
  */
 
 #ifndef NET_H
@@ -14,7 +15,6 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
-#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <esp_heap_caps.h>
 #include "my_config.h"
@@ -70,8 +70,7 @@ inline bool net_fetch_display(int page, const uint8_t **out, size_t *out_len)
     if (!_img_buf) return false;
     if (WiFi.status() != WL_CONNECTED && !net_connect_wifi()) return false;
 
-    WiFiClientSecure client;
-    client.setInsecure();
+    WiFiClient client;
 
     HTTPClient http;
     String url = String(API_BASE_URL) + "/api/display.jpg?page=" + String(page);
@@ -125,8 +124,7 @@ inline bool net_post_local(float temperature, float humidity, float pressure)
 {
     if (WiFi.status() != WL_CONNECTED) return false;
 
-    WiFiClientSecure client;
-    client.setInsecure();
+    WiFiClient client;
 
     HTTPClient http;
     String url = String(API_BASE_URL) + "/api/kiosk/local";

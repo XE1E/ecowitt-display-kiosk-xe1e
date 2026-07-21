@@ -53,8 +53,10 @@ static const int NUM_PAGES = 5;
 // Barra de pestañas: franja inferior de la pantalla. Un toque en esta franja
 // selecciona la pestaña segun la X (repartidas por igual). El servidor dibuja
 // la barra en la misma zona. Un toque fuera de la franja se ignora.
-static const int TABBAR_H   = 64;
-static const int TABBAR_TOP = SCREEN_HEIGHT - TABBAR_H;   // y >= 536 = barra
+static const int TABBAR_H    = 64;
+// Zona TOCABLE de la barra (mas alta que la barra visible, para no fallar el
+// toque): la franja inferior de 110 px cuenta como barra de pestañas.
+static const int TAB_HIT_TOP = SCREEN_HEIGHT - 110;   // y >= 490 = barra
 
 static const size_t FB_BYTES = (size_t)SCREEN_WIDTH * SCREEN_HEIGHT * 2;  // RGB565
 
@@ -68,6 +70,7 @@ static uint32_t  g_fetched[NUM_PAGES + 1] = { 0 };    // millis del ultimo fetch
 static volatile int g_page  = 1;   // pagina deseada (la cambia el touch)
 static volatile int g_shown = 0;   // pagina mostrada actualmente
 static SemaphoreHandle_t g_wake;   // despierta al netTask (tap o arranque)
+static SemaphoreHandle_t g_i2c;    // serializa el bus I2C (touch core1 + BME core0)
 
 static LocalSensorData g_local;
 
@@ -146,13 +149,16 @@ static void netTask(void *)
             }
         }
 
-        // BME280: leer y enviar cada REMOTE_STATION_INTERVAL segundos.
+        // BME280: leer y enviar cada REMOTE_STATION_INTERVAL segundos. La LECTURA
+        // toma el mutex de I2C (el bus lo comparte con el touch del core 1).
 #if BME280_ENABLED
         if (isBME280Available() &&
             (last_bme == 0 || now - last_bme >= (uint32_t)REMOTE_STATION_INTERVAL * 1000UL)) {
-            if (readBME280(g_local) && g_local.valid) {
-                net_post_local(g_local.temperature, g_local.humidity, g_local.pressure);
-            }
+            bool ok;
+            xSemaphoreTake(g_i2c, portMAX_DELAY);
+            ok = readBME280(g_local) && g_local.valid;
+            xSemaphoreGive(g_i2c);
+            if (ok) net_post_local(g_local.temperature, g_local.humidity, g_local.pressure);
             last_bme = now;
         }
 #endif
@@ -188,7 +194,8 @@ void setup()
     setBME280PressureOffset(BME280_PRESS_OFFSET);
 #endif
 
-    // Task de red en el core 0; el loop() (touch) corre en el core 1.
+    // Mutex de I2C + task de red en el core 0; el loop() (touch) corre en el core 1.
+    g_i2c  = xSemaphoreCreateMutex();
     g_wake = xSemaphoreCreateBinary();
     xTaskCreatePinnedToCore(netTask, "net", 8192, nullptr, 1, nullptr, 0);
     xSemaphoreGive(g_wake);   // primer render inmediato
@@ -196,11 +203,15 @@ void setup()
 
 void loop()
 {
-    // Sondeo rapido del touch. Un toque en la barra de pestañas (franja inferior)
-    // salta a la pagina correspondiente; fuera de la barra se ignora.
+    // Sondeo del touch (bajo el mutex de I2C). Un toque en la franja inferior
+    // (barra de pestañas) salta a la pagina correspondiente.
     uint16_t tx = 0, ty = 0;
-    if (touch_input_tapped(&tx, &ty)) {
-        if (ty >= TABBAR_TOP) {
+    xSemaphoreTake(g_i2c, portMAX_DELAY);
+    bool tapped = touch_input_tapped(&tx, &ty);
+    xSemaphoreGive(g_i2c);
+
+    if (tapped) {
+        if (ty >= TAB_HIT_TOP) {
             int idx = (int)((uint32_t)tx * NUM_PAGES / SCREEN_WIDTH);   // 0..N-1
             if (idx < 0) idx = 0;
             if (idx >= NUM_PAGES) idx = NUM_PAGES - 1;
@@ -208,8 +219,8 @@ void loop()
             Serial.printf("[touch] tab x=%u y=%u -> pagina %d\n", tx, ty, p);
             if (p != g_page) { g_page = p; xSemaphoreGive(g_wake); }
         } else {
-            Serial.printf("[touch] x=%u y=%u (fuera de la barra, ignorado)\n", tx, ty);
+            Serial.printf("[touch] x=%u y=%u (fuera de la barra)\n", tx, ty);
         }
     }
-    delay(10);
+    delay(5);
 }

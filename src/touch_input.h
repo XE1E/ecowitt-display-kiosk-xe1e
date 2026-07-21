@@ -24,9 +24,11 @@
 #define GT911_REG_STATUS  0x814E  // estado + nº de puntos
 #define GT911_REG_POINT1  0x8150  // primer punto (8 bytes)
 
-static bool     _touch_was_down = false;
-static uint32_t _touch_last_tap = 0;
-static const uint32_t TOUCH_DEBOUNCE_MS = 300;
+static bool     _touch_was_down  = false;
+static uint32_t _touch_last_tap  = 0;
+static uint32_t _touch_last_seen = 0;   // ultimo millis con un dedo presente
+static const uint32_t TOUCH_DEBOUNCE_MS = 150;
+static const uint32_t TOUCH_RELEASE_MS  = 80;   // sin toque este tiempo => dedo arriba
 
 // Lee `len` bytes desde el registro de 16 bits `reg` del GT911.
 static bool _gt911_read(uint16_t reg, uint8_t *buf, size_t len)
@@ -48,6 +50,14 @@ static void _gt911_write(uint16_t reg, uint8_t val)
     Wire.write((uint8_t)(reg & 0xFF));
     Wire.write(val);
     Wire.endTransmission();
+}
+
+// Lectura cruda del registro de estado del GT911 (debug): 0xFE si falla el I2C.
+inline uint8_t touch_input_raw_status()
+{
+    uint8_t s = 0xFF;
+    if (!_gt911_read(GT911_REG_STATUS, &s, 1)) return 0xFE;
+    return s;
 }
 
 inline void touch_input_begin()
@@ -78,33 +88,39 @@ inline void touch_input_begin()
  */
 inline bool touch_input_tapped(uint16_t *tx = nullptr, uint16_t *ty = nullptr)
 {
-    uint8_t status = 0;
-    if (!_gt911_read(GT911_REG_STATUS, &status, 1)) return false;
-
-    // bit7 = buffer listo; bits0-3 = nº de puntos.
-    if (!(status & 0x80)) return false;
-    uint8_t points = status & 0x0F;
-
     uint16_t x = 0, y = 0;
-    if (points > 0) {
-        uint8_t p[8];
-        if (_gt911_read(GT911_REG_POINT1, p, 8)) {
-            x = (uint16_t)p[1] | ((uint16_t)p[2] << 8);
-            y = (uint16_t)p[3] | ((uint16_t)p[4] << 8);
-        }
-    }
-    _gt911_write(GT911_REG_STATUS, 0);   // limpiar el flag para el proximo ciclo
+    bool present = false;   // hay un dedo AHORA (frame nuevo con >=1 punto)
 
-    bool down = points > 0;
-    bool tapped = false;
-    if (down && !_touch_was_down) {
-        uint32_t now = millis();
-        if (now - _touch_last_tap > TOUCH_DEBOUNCE_MS) {
-            _touch_last_tap = now;
-            tapped = true;
-            if (tx) *tx = x;
-            if (ty) *ty = y;
+    uint8_t status = 0;
+    if (_gt911_read(GT911_REG_STATUS, &status, 1) && (status & 0x80)) {
+        // bit7 = buffer listo; bits0-3 = nº de puntos.
+        uint8_t points = status & 0x0F;
+        if (points > 0) {
+            uint8_t p[8];
+            // Punto 1 desde 0x8150: X en p[0..1], Y en p[2..3] (little-endian).
+            // (El track-id esta en 0x814F, un byte ANTES; no leerlo aqui.)
+            if (_gt911_read(GT911_REG_POINT1, p, 8)) {
+                x = (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+                y = (uint16_t)p[2] | ((uint16_t)p[3] << 8);
+                present = true;
+            }
         }
+        _gt911_write(GT911_REG_STATUS, 0);   // ack: el GT911 prepara el siguiente frame
+    }
+
+    uint32_t now = millis();
+    if (present) _touch_last_seen = now;
+    // "Dedo abajo" = hubo toque hace poco. Puentea los huecos en que el buffer
+    // no esta "listo" (bit7=0) durante un toque sostenido, y cuenta como arriba
+    // cuando el panel queda idle (0x00) al soltar -> resetea el flanco.
+    bool down = (now - _touch_last_seen) <= TOUCH_RELEASE_MS;
+
+    bool tapped = false;
+    if (present && !_touch_was_down && (now - _touch_last_tap > TOUCH_DEBOUNCE_MS)) {
+        _touch_last_tap = now;
+        tapped = true;
+        if (tx) *tx = x;
+        if (ty) *ty = y;
     }
     _touch_was_down = down;
     return tapped;
