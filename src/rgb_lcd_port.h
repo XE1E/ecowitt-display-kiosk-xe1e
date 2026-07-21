@@ -34,10 +34,9 @@
  */
 #define EXAMPLE_LCD_H_RES               (1024)  ///< Horizontal resolution in pixels
 #define EXAMPLE_LCD_V_RES               (600)  ///< Vertical resolution in pixels
-// 24 MHz (bajado desde 30): reduce la demanda de ancho de banda de la PSRAM
-// (menos "puntitos" por underrun del DMA) y da margen a la copia del frame
-// (menos brincoteo al actualizar). Si aparece parpadeo, subir de nuevo.
-#define EXAMPLE_LCD_PIXEL_CLOCK_HZ      (24 * 1000 * 1000) ///< Pixel clock frequency in Hz
+// 30 MHz (valor de Waveshare para este panel). Con PSRAM a 120MHz hay ancho de
+// banda de sobra para alimentarlo sin underrun.
+#define EXAMPLE_LCD_PIXEL_CLOCK_HZ      (30 * 1000 * 1000) ///< Pixel clock frequency in Hz
 
 /**
  * @brief Color and Pixel Configuration
@@ -45,14 +44,16 @@
 #define EXAMPLE_LCD_BIT_PER_PIXEL       (16)   ///< Bits per pixel (color depth)
 #define EXAMPLE_RGB_BIT_PER_PIXEL       (16)   ///< RGB interface color depth
 #define EXAMPLE_RGB_DATA_WIDTH          (16)   ///< Data width for RGB interface
-// 2 framebuffers (doble buffer): se dibuja sobre el buffer de atras (nunca el
-// que el panel esta leyendo) -> sin fantasmas/remanentes. El swap se hace en
-// vsync gracias a CONFIG_LCD_RGB_RESTART_IN_VSYNC=y (ver custom_sdkconfig en
-// platformio.ini) -> transicion limpia, sin "brinco" ni tearing.
+// 2 framebuffers (doble buffer, lo correcto): se dibuja sobre el buffer de atras
+// y el driver conmuta en vsync. Requiere ancho de banda de PSRAM suficiente: con
+// PSRAM a 120MHz (CONFIG_SPIRAM_SPEED_120M, ver platformio.ini) el DMA no se
+// queda corto y la conmutacion es limpia, sin desfase ni puntitos.
 #define EXAMPLE_LCD_RGB_BUFFER_NUMS     (2)    ///< Number of frame buffers
-// Bounce buffer amplio: da margen ante picos de latencia de la PSRAM y evita
-// los "puntitos" blancos transitorios (underrun del DMA del panel).
-#define EXAMPLE_RGB_BOUNCE_BUFFER_SIZE  (EXAMPLE_LCD_H_RES * 20) ///< Size of bounce buffer for RGB data
+// Bounce buffer (necesario: sin el hay que bajar tanto el pclk que parpadea).
+// El DMA lee la PSRAM en rafagas a este buffer en SRAM. La copia del frame se
+// hace en trozos con micro-pausas (ver draw_page) para no saturar el bus PSRAM
+// y que el DMA no pierda sincronia.
+#define EXAMPLE_RGB_BOUNCE_BUFFER_SIZE  (EXAMPLE_LCD_H_RES * 10) ///< bounce buffer (px)
 
 /**
  * @brief GPIO Pins for RGB LCD Signals
@@ -134,6 +135,21 @@ void wavesahre_rgb_lcd_display(uint8_t *Image);
  * @param buf2 Pointer to hold the address of the second frame buffer.
  */
 void waveshare_get_frame_buffer(void **buf1, void **buf2);
+
+/**
+ * @brief Presenta un framebuffer del driver (fb0/fb1) con flush de cache +
+ *        swap instantaneo en vsync. Usar tras escribir el frame con la CPU en
+ *        uno de los framebuffers devueltos por waveshare_get_frame_buffer().
+ */
+void waveshare_present_fb(void *fb);
+
+/** Flush de un tramo del framebuffer (cache CPU -> PSRAM), para repartir el
+ *  trafico de bus copiando por trozos. Ver waveshare_swap_fb. */
+void waveshare_fb_flush(void *addr, size_t bytes);
+
+/** Marca el swap del framebuffer para el proximo vsync SIN flush (se asume ya
+ *  sincronizado por trozos). Bus libre en el instante del swap -> sin desfase. */
+void waveshare_swap_fb(void *fb);
 
 /**
  * @brief Espera hasta el proximo fin de frame del panel (o hasta timeout_ms).

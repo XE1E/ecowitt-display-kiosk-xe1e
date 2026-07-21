@@ -14,6 +14,7 @@
 
 #include "rgb_lcd_port.h"
 #include "freertos/semphr.h"
+#include "esp_cache.h"
 
 static const char *TAG = "rgb_lcd";
 
@@ -129,9 +130,42 @@ void wavesahre_rgb_lcd_display(uint8_t *Image)
     esp_lcd_panel_draw_bitmap(panel_handle, 0, 0, EXAMPLE_LCD_H_RES, EXAMPLE_LCD_V_RES, Image);
 }
 
+// Presenta un framebuffer que YA es uno de los framebuffers del driver (fb0/fb1).
+// A diferencia de pasar un buffer externo (que el driver copia ~20ms, cruzando
+// el vsync y desfasando el reinicio del barrido -> "salto"), aqui:
+//   1. Se hace el flush de cache C->PSRAM del framebuffer (lo escribio la CPU;
+//      con swap "zero-copy" el driver NO sincroniza la cache por nosotros).
+//   2. draw_bitmap con el puntero de un framebuffer solo marca el swap para el
+//      proximo vsync (instantaneo) -> reinicio limpio, sin salto.
+void waveshare_present_fb(void *fb)
+{
+    esp_cache_msync(fb, EXAMPLE_LCD_H_RES * EXAMPLE_LCD_V_RES * 2,
+                    ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+    esp_lcd_panel_draw_bitmap(panel_handle, 0, 0, EXAMPLE_LCD_H_RES, EXAMPLE_LCD_V_RES, fb);
+}
+
+// Flush de un tramo del framebuffer (cache CPU -> PSRAM). Se llama por trozos
+// junto con la copia para repartir el trafico de bus y no starvar al DMA.
+void waveshare_fb_flush(void *addr, size_t bytes)
+{
+    esp_cache_msync(addr, bytes, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+}
+
+// Solo marca el swap del framebuffer para el proximo vsync (SIN flush: se asume
+// que el frame ya se sincronizo por trozos). Bus libre al momento del swap.
+void waveshare_swap_fb(void *fb)
+{
+    esp_lcd_panel_draw_bitmap(panel_handle, 0, 0, EXAMPLE_LCD_H_RES, EXAMPLE_LCD_V_RES, fb);
+}
+
 void waveshare_get_frame_buffer(void **buf1, void **buf2)
 {
+#if EXAMPLE_LCD_RGB_BUFFER_NUMS >= 2
     ESP_ERROR_CHECK(esp_lcd_rgb_panel_get_frame_buffer(panel_handle, 2, buf1, buf2));
+#else
+    ESP_ERROR_CHECK(esp_lcd_rgb_panel_get_frame_buffer(panel_handle, 1, buf1));
+    if (buf2) *buf2 = NULL;
+#endif
 }
 
 void wavesahre_rgb_lcd_bl_on()  {}

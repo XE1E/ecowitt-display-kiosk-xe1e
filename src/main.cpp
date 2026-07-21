@@ -33,11 +33,28 @@
 #include "net.h"
 #include "bme280_sensor.h"
 
+// Defaults por si my_config.h (copiado de una plantilla vieja) no los trae.
+#ifndef BME280_TEMP_OFFSET
+#define BME280_TEMP_OFFSET  0.0f
+#endif
+#ifndef BME280_HUM_OFFSET
+#define BME280_HUM_OFFSET   0.0f
+#endif
+#ifndef BME280_PRESS_OFFSET
+#define BME280_PRESS_OFFSET 0.0f
+#endif
+
 static const int NUM_PAGES = 2;
 static const size_t FB_BYTES = (size_t)SCREEN_WIDTH * SCREEN_HEIGHT * 2;  // RGB565
 
 // ── Estado compartido ────────────────────────────────────────────────────
-static uint16_t *g_pagebuf[NUM_PAGES + 1] = { nullptr };  // decodificado por pagina (1..N)
+// Un framebuffer del driver DEDICADO a cada pagina (pagina P -> g_fb[P-1]).
+// Cambiar de pagina = swap puro (el panel conmuta que FB lee), SIN copiar nada
+// -> sin escritura de PSRAM -> sin contencion -> sin brinca. La imagen de cada
+// pagina se decodifica en g_scratch (offscreen) y se copia a su FB dedicado solo
+// al cargar/refrescar (raro), que es el unico momento con un brinca breve.
+static uint16_t *g_fb[NUM_PAGES]          = { nullptr };   // FB dedicado por pagina
+static uint16_t *g_scratch                = nullptr;       // buffer de decodificacion
 static bool      g_ready[NUM_PAGES + 1]   = { false };     // ¿esa pagina ya tiene imagen?
 static uint32_t  g_fetched[NUM_PAGES + 1] = { 0 };         // millis del ultimo fetch por pagina
 
@@ -48,12 +65,12 @@ static SemaphoreHandle_t g_wake;       // despierta al netTask (tap o arranque)
 static LocalSensorData g_local;
 
 // ── Pinta una pagina ya decodificada ──────────────────────────────────────
+// Muestra una pagina: swap PURO al framebuffer dedicado de esa pagina. No copia
+// ni escribe PSRAM -> sin contencion -> transicion limpia, sin brinca.
 static void draw_page(int page)
 {
-    if (page < 1 || page > NUM_PAGES || !g_ready[page]) return;
-    // Doble buffer: draw_bitmap copia al framebuffer de atras y el driver hace
-    // el swap en vsync (CONFIG_LCD_RGB_RESTART_IN_VSYNC=y). Transicion limpia.
-    wavesahre_rgb_lcd_display((uint8_t *)g_pagebuf[page]);
+    if (page < 1 || page > NUM_PAGES || !g_ready[page] || !g_fb[page - 1]) return;
+    waveshare_swap_fb(g_fb[page - 1]);
     g_shown = page;
 }
 
@@ -63,7 +80,21 @@ static bool fetch_page(int page)
     const uint8_t *jpg = nullptr;
     size_t jpg_len = 0;
     if (!net_fetch_display(page, &jpg, &jpg_len)) return false;
-    if (!jpeg_decode_to_fb(jpg, jpg_len, g_pagebuf[page])) return false;
+    if (!jpeg_decode_to_fb(jpg, jpg_len, g_scratch)) return false;
+
+    // Copia scratch -> FB dedicado de la pagina, en trozos + flush por trozo,
+    // para no saturar el bus PSRAM (unico momento con posible brinca breve; raro).
+    const int CHUNK_ROWS = 30;
+    const size_t row_bytes = (size_t)SCREEN_WIDTH * 2;
+    uint8_t *dst = (uint8_t *)g_fb[page - 1];
+    uint8_t *src = (uint8_t *)g_scratch;
+    for (int y = 0; y < SCREEN_HEIGHT; y += CHUNK_ROWS) {
+        int rows = min(CHUNK_ROWS, SCREEN_HEIGHT - y);
+        size_t off = (size_t)y * row_bytes, n = (size_t)rows * row_bytes;
+        memcpy(dst + off, src + off, n);
+        waveshare_fb_flush(dst + off, n);
+        delayMicroseconds(200);
+    }
     g_ready[page]   = true;
     g_fetched[page] = millis();
     return true;
@@ -126,20 +157,23 @@ void setup()
     // I2C compartido (CH422G, GT911, BME280) en 8/9.
     Wire.begin(I2C_SDA, I2C_SCL, I2C_FREQ);
 
-    // Panel RGB (el driver mantiene su propio doble framebuffer).
+    // Panel RGB + sus dos framebuffers: uno DEDICADO por pagina.
     waveshare_esp32_s3_rgb_lcd_init();
+    waveshare_get_frame_buffer((void **)&g_fb[0], (void **)&g_fb[1]);
+    for (int i = 0; i < NUM_PAGES; i++)
+        if (g_fb[i]) memset(g_fb[i], 0, FB_BYTES);
 
-    // Un buffer de decodificacion por pagina (cache) en PSRAM.
-    for (int p = 1; p <= NUM_PAGES; p++) {
-        g_pagebuf[p] = (uint16_t *)heap_caps_malloc(FB_BYTES, MALLOC_CAP_SPIRAM);
-        if (g_pagebuf[p]) memset(g_pagebuf[p], 0, FB_BYTES);
-        else Serial.printf("[boot] ERROR: sin PSRAM para pagina %d\n", p);
-    }
+    // Buffer de decodificacion (offscreen) en PSRAM.
+    g_scratch = (uint16_t *)heap_caps_malloc(FB_BYTES, MALLOC_CAP_SPIRAM);
+    if (!g_scratch) Serial.println("[boot] ERROR: sin PSRAM para el buffer de decode");
 
     // Touch + BME280.
     touch_input_begin();
 #if BME280_ENABLED
     initBME280(BME280_I2C_ADDR);
+    setBME280TemperatureOffset(BME280_TEMP_OFFSET);
+    setBME280HumidityOffset(BME280_HUM_OFFSET);
+    setBME280PressureOffset(BME280_PRESS_OFFSET);
 #endif
 
     // Task de red en el core 0; el loop() (touch) corre en el core 1.

@@ -42,4 +42,12 @@
 // Intervalo de envio del BME280 al servidor, en segundos (minimo 60).
 #define REMOTE_STATION_INTERVAL  60
 
+// Offsets de calibracion (se SUMAN a la lectura cruda). Ajustar comparando
+// contra una referencia (termometro / la estacion principal). Ej.: si el BME280
+// marca 29.7 y el real es 25 -> offset = 25 - 29.7 = -4.7. El BME280 suele leer
+// alto por cercania a la electronica; estos offsets lo dejan aproximado.
+#define BME280_TEMP_OFFSET     0.0f   // grados C
+#define BME280_HUM_OFFSET      0.0f   // %
+#define BME280_PRESS_OFFSET    0.0f   // hPa
+
 #endif // MY_CONFIG_H
