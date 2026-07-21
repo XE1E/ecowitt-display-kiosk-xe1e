@@ -5,15 +5,17 @@
  * JPEG 1024x600 (/api/display.jpg?page=N) y el ESP32 solo la baja, la decodifica
  * y la pinta. Ver docs/ARQUITECTURA.md.
  *
- * Arquitectura de tareas (para que el touch responda al instante):
- *   - Core 1 (loop): sondea el touch cada ~10 ms. Un tap cambia de pagina y
- *     despierta al task de red.
- *   - Core 0 (netTask): baja + decodifica + pinta la imagen; envia el BME280.
+ * Navegacion: el servidor dibuja una BARRA DE PESTAÑAS abajo (una por pagina).
+ * El firmware mapea la coordenada del toque a la pestaña -> salta a esa pagina.
  *
- * Cada pagina se decodifica en su propio buffer en PSRAM (cache), asi que al
- * tocar se pinta al instante (sin esperar la red). El update de imagen se hace
- * con esp_lcd_panel_draw_bitmap desde un buffer aparte: el driver hace el
- * doble-buffer sincronizado a vsync -> sin tearing ni "brinco".
+ * Framebuffers: el panel tiene 2. Se usan como cache de las 2 ultimas paginas
+ * distintas mostradas. Volver a una pagina que sigue en un FB = swap PURO (sin
+ * escribir PSRAM -> sin contencion -> transicion 100% limpia). Ir a una pagina
+ * nueva la decodifica en el FB de atras (breve brinca al escribir el frame, solo
+ * en ese tap). El refresco de datos recarga el FB mostrado (brinca, poco seguido).
+ *
+ * Tareas: core 1 (loop) sondea el touch; core 0 (netTask) baja/decodifica/pinta
+ * y envia el BME280.
  *
  * Hardware: Waveshare ESP32-S3-Touch-LCD-7B (8MB PSRAM OPI, 16MB flash).
  */
@@ -44,49 +46,44 @@
 #define BME280_PRESS_OFFSET 0.0f
 #endif
 
-static const int NUM_PAGES = 2;
+// Numero de paginas del kiosco. DEBE coincidir con las paginas que dibuja el
+// servidor (KioskPage) y con el numero de pestañas de la barra.
+static const int NUM_PAGES = 5;
+
+// Barra de pestañas: franja inferior de la pantalla. Un toque en esta franja
+// selecciona la pestaña segun la X (repartidas por igual). El servidor dibuja
+// la barra en la misma zona. Un toque fuera de la franja se ignora.
+static const int TABBAR_H   = 64;
+static const int TABBAR_TOP = SCREEN_HEIGHT - TABBAR_H;   // y >= 536 = barra
+
 static const size_t FB_BYTES = (size_t)SCREEN_WIDTH * SCREEN_HEIGHT * 2;  // RGB565
 
 // ── Estado compartido ────────────────────────────────────────────────────
-// Un framebuffer del driver DEDICADO a cada pagina (pagina P -> g_fb[P-1]).
-// Cambiar de pagina = swap puro (el panel conmuta que FB lee), SIN copiar nada
-// -> sin escritura de PSRAM -> sin contencion -> sin brinca. La imagen de cada
-// pagina se decodifica en g_scratch (offscreen) y se copia a su FB dedicado solo
-// al cargar/refrescar (raro), que es el unico momento con un brinca breve.
-static uint16_t *g_fb[NUM_PAGES]          = { nullptr };   // FB dedicado por pagina
-static uint16_t *g_scratch                = nullptr;       // buffer de decodificacion
-static bool      g_ready[NUM_PAGES + 1]   = { false };     // ¿esa pagina ya tiene imagen?
-static uint32_t  g_fetched[NUM_PAGES + 1] = { 0 };         // millis del ultimo fetch por pagina
+static uint16_t *g_fb[2]     = { nullptr, nullptr };  // los 2 framebuffers del panel
+static int       g_fbPage[2] = { 0, 0 };              // que pagina tiene cada FB (0=ninguna)
+static int       g_shownFb   = 0;                     // indice del FB mostrado
+static uint16_t *g_scratch   = nullptr;               // buffer de decodificacion (offscreen)
+static uint32_t  g_fetched[NUM_PAGES + 1] = { 0 };    // millis del ultimo fetch por pagina
 
-static volatile int g_page = 1;        // pagina deseada (la cambia el touch)
-static volatile int g_shown = 0;       // pagina actualmente pintada
-static SemaphoreHandle_t g_wake;       // despierta al netTask (tap o arranque)
+static volatile int g_page  = 1;   // pagina deseada (la cambia el touch)
+static volatile int g_shown = 0;   // pagina mostrada actualmente
+static SemaphoreHandle_t g_wake;   // despierta al netTask (tap o arranque)
 
 static LocalSensorData g_local;
 
-// ── Pinta una pagina ya decodificada ──────────────────────────────────────
-// Muestra una pagina: swap PURO al framebuffer dedicado de esa pagina. No copia
-// ni escribe PSRAM -> sin contencion -> transicion limpia, sin brinca.
-static void draw_page(int page)
-{
-    if (page < 1 || page > NUM_PAGES || !g_ready[page] || !g_fb[page - 1]) return;
-    waveshare_swap_fb(g_fb[page - 1]);
-    g_shown = page;
-}
-
-// ── Baja + decodifica una pagina en su buffer ──────────────────────────────
-static bool fetch_page(int page)
+// ── Baja + decodifica la pagina y la copia al framebuffer indicado ──────────
+// La copia va en trozos con flush+micro-pausa para no saturar el bus PSRAM (si
+// fbIdx es el FB mostrado, ahi ocurre el unico brinca; poco seguido).
+static bool load_into(int fbIdx, int page)
 {
     const uint8_t *jpg = nullptr;
     size_t jpg_len = 0;
     if (!net_fetch_display(page, &jpg, &jpg_len)) return false;
     if (!jpeg_decode_to_fb(jpg, jpg_len, g_scratch)) return false;
 
-    // Copia scratch -> FB dedicado de la pagina, en trozos + flush por trozo,
-    // para no saturar el bus PSRAM (unico momento con posible brinca breve; raro).
     const int CHUNK_ROWS = 30;
     const size_t row_bytes = (size_t)SCREEN_WIDTH * 2;
-    uint8_t *dst = (uint8_t *)g_fb[page - 1];
+    uint8_t *dst = (uint8_t *)g_fb[fbIdx];
     uint8_t *src = (uint8_t *)g_scratch;
     for (int y = 0; y < SCREEN_HEIGHT; y += CHUNK_ROWS) {
         int rows = min(CHUNK_ROWS, SCREEN_HEIGHT - y);
@@ -95,12 +92,35 @@ static bool fetch_page(int page)
         waveshare_fb_flush(dst + off, n);
         delayMicroseconds(200);
     }
-    g_ready[page]   = true;
-    g_fetched[page] = millis();
+    g_fbPage[fbIdx]  = page;
+    g_fetched[page]  = millis();
     return true;
 }
 
-// ── Task de red (core 0): fetch + decode + draw + BME280 ────────────────────
+// ── Muestra una pagina ──────────────────────────────────────────────────────
+static void show(int page)
+{
+    if (page < 1 || page > NUM_PAGES) return;
+
+    // ¿Ya esta cargada en algun framebuffer? -> swap PURO (transicion limpia).
+    for (int i = 0; i < 2; i++) {
+        if (g_fbPage[i] == page) {
+            waveshare_swap_fb(g_fb[i]);
+            g_shownFb = i;
+            g_shown = page;
+            return;
+        }
+    }
+    // No cacheada: cargarla en el FB de atras y conmutar.
+    int back = g_shownFb ^ 1;
+    if (load_into(back, page)) {
+        waveshare_swap_fb(g_fb[back]);
+        g_shownFb = back;
+        g_shown = page;
+    }
+}
+
+// ── Task de red (core 0) ────────────────────────────────────────────────────
 static void netTask(void *)
 {
     net_begin();
@@ -109,33 +129,24 @@ static void netTask(void *)
     uint32_t last_bme = 0;
 
     for (;;) {
-        // Espera un tap (semaforo) o hasta 500 ms para el refresco periodico.
         xSemaphoreTake(g_wake, pdMS_TO_TICKS(500));
 
-        int page = g_page;   // pagina deseada actual
+        int page = g_page;
 
-        // 1) Cambio de pagina: si ya esta en cache, pintar al instante.
-        if (page != g_shown && g_ready[page]) {
-            draw_page(page);
-        }
+        // Cambio de pagina (tap en una pestaña).
+        if (page != g_shown) show(page);
 
-        // 2) Refresco de datos: si la pagina no tiene imagen o esta vieja.
+        // Refresco de datos de la pagina mostrada, si esta vieja: recarga su
+        // propio FB (actualiza en vivo; breve brinca, poco seguido).
         uint32_t now = millis();
-        bool stale = !g_ready[page] ||
-                     (now - g_fetched[page] >= UPDATE_INTERVAL_MS);
-        if (stale) {
-            if (fetch_page(page) && page == g_page) {
-                draw_page(page);   // solo si sigue siendo la pagina deseada
+        if (g_shown >= 1 &&
+            (g_fetched[g_shown] == 0 || now - g_fetched[g_shown] >= UPDATE_INTERVAL_MS)) {
+            for (int i = 0; i < 2; i++) {
+                if (g_fbPage[i] == g_shown) { load_into(i, g_shown); break; }
             }
         }
 
-        // 2b) Pre-cargar en cache las paginas que aun no tienen imagen, para
-        //     que el primer cambio de pagina tambien sea instantaneo.
-        for (int p = 1; p <= NUM_PAGES; p++) {
-            if (!g_ready[p]) fetch_page(p);
-        }
-
-        // 3) BME280: leer y enviar cada REMOTE_STATION_INTERVAL segundos.
+        // BME280: leer y enviar cada REMOTE_STATION_INTERVAL segundos.
 #if BME280_ENABLED
         if (isBME280Available() &&
             (last_bme == 0 || now - last_bme >= (uint32_t)REMOTE_STATION_INTERVAL * 1000UL)) {
@@ -157,11 +168,12 @@ void setup()
     // I2C compartido (CH422G, GT911, BME280) en 8/9.
     Wire.begin(I2C_SDA, I2C_SCL, I2C_FREQ);
 
-    // Panel RGB + sus dos framebuffers: uno DEDICADO por pagina.
+    // Panel RGB + sus dos framebuffers.
     waveshare_esp32_s3_rgb_lcd_init();
     waveshare_get_frame_buffer((void **)&g_fb[0], (void **)&g_fb[1]);
-    for (int i = 0; i < NUM_PAGES; i++)
+    for (int i = 0; i < 2; i++)
         if (g_fb[i]) memset(g_fb[i], 0, FB_BYTES);
+    g_shownFb = 0;
 
     // Buffer de decodificacion (offscreen) en PSRAM.
     g_scratch = (uint16_t *)heap_caps_malloc(FB_BYTES, MALLOC_CAP_SPIRAM);
@@ -184,12 +196,20 @@ void setup()
 
 void loop()
 {
-    // Sondeo rapido del touch. Un tap avanza de pagina y despierta al netTask,
-    // que pinta la pagina cacheada al instante.
-    if (touch_input_tapped()) {
-        g_page = (g_page % NUM_PAGES) + 1;   // 1 -> 2 -> 1 ...
-        Serial.printf("[touch] pagina -> %d\n", g_page);
-        xSemaphoreGive(g_wake);
+    // Sondeo rapido del touch. Un toque en la barra de pestañas (franja inferior)
+    // salta a la pagina correspondiente; fuera de la barra se ignora.
+    uint16_t tx = 0, ty = 0;
+    if (touch_input_tapped(&tx, &ty)) {
+        if (ty >= TABBAR_TOP) {
+            int idx = (int)((uint32_t)tx * NUM_PAGES / SCREEN_WIDTH);   // 0..N-1
+            if (idx < 0) idx = 0;
+            if (idx >= NUM_PAGES) idx = NUM_PAGES - 1;
+            int p = idx + 1;
+            Serial.printf("[touch] tab x=%u y=%u -> pagina %d\n", tx, ty, p);
+            if (p != g_page) { g_page = p; xSemaphoreGive(g_wake); }
+        } else {
+            Serial.printf("[touch] x=%u y=%u (fuera de la barra, ignorado)\n", tx, ty);
+        }
     }
     delay(10);
 }
