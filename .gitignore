@@ -13,6 +13,7 @@ dependencies.lock
 sdkconfig
 sdkconfig.*
 CMakeLists.txt
+src/idf_component.yml
 
 # Editores / IDE
 .vscode/
