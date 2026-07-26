@@ -41,6 +41,16 @@
 #define SCREEN_HEIGHT  600
 
 // ============================================================================
+// Páginas del kiosco
+// ============================================================================
+// 5 páginas numeradas (con barra de pestañas que dibuja el servidor) + la
+// CONSOLA, que es full-screen SIN barra (id interno PAGE_CONSOLA, URL
+// ?page=consola). La barra muestra NUM_TABS pestañas: las 5 páginas + "Consola".
+#define NUM_TABS      6     // pestañas visibles en la barra (5 + Consola)
+#define PAGE_CONSOLA  6     // id interno de la consola (full-screen)
+#define MAX_PAGE_ID   6     // ids de página válidos: 1..MAX_PAGE_ID
+
+// ============================================================================
 // Estructura del sensor local (la usa bme280_sensor.h)
 // ============================================================================
 struct LocalSensorData {

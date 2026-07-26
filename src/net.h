@@ -73,7 +73,10 @@ inline bool net_fetch_display(int page, const uint8_t **out, size_t *out_len)
     WiFiClient client;
 
     HTTPClient http;
-    String url = String(API_BASE_URL) + "/api/display.jpg?page=" + String(page);
+    // La consola es una página especial full-screen: URL ?page=consola. El resto
+    // son numéricas (?page=N).
+    String pageParam = (page == PAGE_CONSOLA) ? String("consola") : String(page);
+    String url = String(API_BASE_URL) + "/api/display.jpg?page=" + pageParam;
     if (!http.begin(client, url)) {
         Serial.println("[net] http.begin fallo");
         return false;

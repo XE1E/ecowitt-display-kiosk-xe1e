@@ -46,9 +46,10 @@
 #define BME280_PRESS_OFFSET 0.0f
 #endif
 
-// Numero de paginas del kiosco. DEBE coincidir con las paginas que dibuja el
-// servidor (KioskPage) y con el numero de pestañas de la barra.
-static const int NUM_PAGES = 5;
+// Páginas: constantes en config.h (NUM_TABS, PAGE_CONSOLA, MAX_PAGE_ID). La barra
+// (que dibuja el servidor) muestra NUM_TABS pestañas: las 5 numeradas + "Consola".
+// La consola (PAGE_CONSOLA) es full-screen SIN barra; estando en ella, un toque en
+// cualquier parte regresa a la página 1.
 
 // Barra de pestañas: franja inferior de la pantalla. Un toque en esta franja
 // selecciona la pestaña segun la X (repartidas por igual). El servidor dibuja
@@ -65,7 +66,7 @@ static uint16_t *g_fb[2]     = { nullptr, nullptr };  // los 2 framebuffers del 
 static int       g_fbPage[2] = { 0, 0 };              // que pagina tiene cada FB (0=ninguna)
 static int       g_shownFb   = 0;                     // indice del FB mostrado
 static uint16_t *g_scratch   = nullptr;               // buffer de decodificacion (offscreen)
-static uint32_t  g_fetched[NUM_PAGES + 1] = { 0 };    // millis del ultimo fetch por pagina
+static uint32_t  g_fetched[MAX_PAGE_ID + 1] = { 0 };  // millis del ultimo fetch por pagina (1..MAX_PAGE_ID)
 
 static volatile int g_page  = 1;   // pagina deseada (la cambia el touch)
 static volatile int g_shown = 0;   // pagina mostrada actualmente
@@ -103,7 +104,7 @@ static bool load_into(int fbIdx, int page)
 // ── Muestra una pagina ──────────────────────────────────────────────────────
 static void show(int page)
 {
-    if (page < 1 || page > NUM_PAGES) return;
+    if (page < 1 || page > MAX_PAGE_ID) return;
 
     // ¿Ya esta cargada en algun framebuffer? -> swap PURO (transicion limpia).
     for (int i = 0; i < 2; i++) {
@@ -211,11 +212,17 @@ void loop()
     xSemaphoreGive(g_i2c);
 
     if (tapped) {
-        if (ty >= TAB_HIT_TOP) {
-            int idx = (int)((uint32_t)tx * NUM_PAGES / SCREEN_WIDTH);   // 0..N-1
+        if (g_shown == PAGE_CONSOLA) {
+            // Consola (full-screen, sin barra): un toque en CUALQUIER parte regresa
+            // a la página 1 (principal).
+            Serial.printf("[touch] consola x=%u y=%u -> pagina 1\n", tx, ty);
+            if (g_page != 1) { g_page = 1; xSemaphoreGive(g_wake); }
+        } else if (ty >= TAB_HIT_TOP) {
+            // Barra de NUM_TABS pestañas: las 5 numeradas + "Consola" (la última).
+            int idx = (int)((uint32_t)tx * NUM_TABS / SCREEN_WIDTH);   // 0..NUM_TABS-1
             if (idx < 0) idx = 0;
-            if (idx >= NUM_PAGES) idx = NUM_PAGES - 1;
-            int p = idx + 1;
+            if (idx >= NUM_TABS) idx = NUM_TABS - 1;
+            int p = (idx == NUM_TABS - 1) ? PAGE_CONSOLA : (idx + 1);
             Serial.printf("[touch] tab x=%u y=%u -> pagina %d\n", tx, ty, p);
             if (p != g_page) { g_page = p; xSemaphoreGive(g_wake); }
         } else {
