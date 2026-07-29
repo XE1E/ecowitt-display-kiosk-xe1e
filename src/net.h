@@ -1,9 +1,10 @@
 /**
- * net.h - WiFi + HTTP.
+ * net.h - HTTP para el display kiosco.
  *
- *  - Conexion WiFi con hasta 3 redes (fallback).
  *  - GET del JPEG del display: /api/display.jpg?page=N  -> buffer en PSRAM.
  *  - POST del BME280 local:    /api/kiosk/local          (JSON).
+ *
+ * La conexión WiFi la maneja wifi_config.h (WiFiManager + NVS).
  *
  * Se baja por HTTP (no HTTPS): el handshake TLS en el ESP32 tarda ~1-2s por
  * peticion y hacia lentisimo el cambio de pagina. La imagen es publica y no hay
@@ -17,38 +18,12 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <esp_heap_caps.h>
-#include "my_config.h"
 #include "config.h"
+#include "wifi_config.h"
 
 // Buffer en PSRAM para el JPEG descargado (se reserva 1 vez en net_begin).
 static uint8_t *_img_buf = nullptr;
 static const size_t IMG_BUF_MAX = 256 * 1024;   // margen de sobra para ~50KB
-
-inline bool net_connect_wifi(uint32_t timeout_ms = 20000)
-{
-    struct { const char *ssid; const char *pass; } nets[] = {
-        { WIFI_SSID1, WIFI_PASSWORD1 },
-        { WIFI_SSID2, WIFI_PASSWORD2 },
-        { WIFI_SSID3, WIFI_PASSWORD3 },
-    };
-
-    WiFi.mode(WIFI_STA);
-    for (auto &n : nets) {
-        if (!n.ssid || strlen(n.ssid) == 0) continue;
-        Serial.printf("[wifi] conectando a %s ...\n", n.ssid);
-        WiFi.begin(n.ssid, n.pass);
-        uint32_t start = millis();
-        while (WiFi.status() != WL_CONNECTED && millis() - start < timeout_ms) {
-            delay(250);
-        }
-        if (WiFi.status() == WL_CONNECTED) {
-            Serial.printf("[wifi] OK, IP %s\n", WiFi.localIP().toString().c_str());
-            return true;
-        }
-        Serial.printf("[wifi] fallo con %s\n", n.ssid);
-    }
-    return false;
-}
 
 inline void net_begin()
 {
@@ -68,7 +43,7 @@ inline void net_begin()
 inline bool net_fetch_display(int page, const uint8_t **out, size_t *out_len)
 {
     if (!_img_buf) return false;
-    if (WiFi.status() != WL_CONNECTED && !net_connect_wifi()) return false;
+    if (WiFi.status() != WL_CONNECTED && !wifi_config_reconnect()) return false;
 
     WiFiClient client;
 
@@ -76,7 +51,7 @@ inline bool net_fetch_display(int page, const uint8_t **out, size_t *out_len)
     // La consola es una página especial full-screen: URL ?page=consola. El resto
     // son numéricas (?page=N).
     String pageParam = (page == PAGE_CONSOLA) ? String("consola") : String(page);
-    String url = String(API_BASE_URL) + "/api/display.jpg?page=" + pageParam;
+    String url = String(wifi_config_get_api_url()) + "/api/display.jpg?page=" + pageParam;
     if (!http.begin(client, url)) {
         Serial.println("[net] http.begin fallo");
         return false;
@@ -125,12 +100,12 @@ inline bool net_fetch_display(int page, const uint8_t **out, size_t *out_len)
  */
 inline bool net_post_local(float temperature, float humidity, float pressure)
 {
-    if (WiFi.status() != WL_CONNECTED) return false;
+    if (WiFi.status() != WL_CONNECTED && !wifi_config_reconnect()) return false;
 
     WiFiClient client;
 
     HTTPClient http;
-    String url = String(API_BASE_URL) + "/api/kiosk/local";
+    String url = String(wifi_config_get_api_url()) + "/api/kiosk/local";
     if (!http.begin(client, url)) return false;
     http.addHeader("Content-Type", "application/json");
 

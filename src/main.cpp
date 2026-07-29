@@ -30,6 +30,8 @@
 #include "config.h"
 #include "my_config.h"
 #include "rgb_lcd_port.h"
+#include "ap_screen.h"
+#include "wifi_config.h"
 #include "jpeg_render.h"
 #include "touch_input.h"
 #include "net.h"
@@ -128,7 +130,7 @@ static void show(int page)
 static void netTask(void *)
 {
     net_begin();
-    net_connect_wifi();
+    // WiFi ya conectado por wifi_config_begin() en setup().
 
     uint32_t last_bme = 0;
 
@@ -166,6 +168,15 @@ static void netTask(void *)
     }
 }
 
+// Callback para mostrar pantalla de modo AP.
+static void on_ap_mode(const char *ap_name, const char *ip)
+{
+    Serial.printf("[wifi] modo AP: %s en %s\n", ap_name, ip);
+    if (g_fb[0]) {
+        ap_screen_show(g_fb[0], ap_name, ip);
+    }
+}
+
 void setup()
 {
     Serial.begin(115200);
@@ -175,12 +186,19 @@ void setup()
     // I2C compartido (CH422G, GT911, BME280) en 8/9.
     Wire.begin(I2C_SDA, I2C_SCL, I2C_FREQ);
 
-    // Panel RGB + sus dos framebuffers.
+    // Panel RGB + sus dos framebuffers (antes de WiFi para mostrar pantalla de AP).
     waveshare_esp32_s3_rgb_lcd_init();
     waveshare_get_frame_buffer((void **)&g_fb[0], (void **)&g_fb[1]);
     for (int i = 0; i < 2; i++)
         if (g_fb[i]) memset(g_fb[i], 0, FB_BYTES);
     g_shownFb = 0;
+
+    // Registrar callback para mostrar pantalla cuando entre en modo AP.
+    wifi_config_set_ap_callback(on_ap_mode);
+
+    // WiFi: intenta conectar a redes guardadas, o abre portal de configuración.
+    // Bloquea hasta tener conexión. Si entra en modo AP, llama al callback.
+    wifi_config_begin();
 
     // Buffer de decodificacion (offscreen) en PSRAM.
     g_scratch = (uint16_t *)heap_caps_malloc(FB_BYTES, MALLOC_CAP_SPIRAM);

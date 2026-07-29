@@ -44,9 +44,9 @@ I2C compartido en **GPIO 8 (SDA) / 9 (SCL)**. Pines del panel RGB en
 ## Compilar y flashear (PlatformIO)
 
 ```bash
-# 1. Credenciales
+# 1. Configuración (opcional, los defaults funcionan)
 cp my_config.h.template src/my_config.h
-#    edita src/my_config.h: WIFI_SSID1/PASSWORD1 y API_BASE_URL
+#    edita src/my_config.h si quieres cambiar el nombre del AP, timeouts, etc.
 
 # 2. Compilar y subir
 pio run -t upload
@@ -58,17 +58,40 @@ pio device monitor
 Ajusta la altitud de tu sitio en `src/config.h` (`BME280_ALTITUDE`, por defecto
 2240 m para CDMX) para que la presión se corrija a nivel del mar.
 
+## Configuración WiFi (WiFiManager)
+
+El firmware usa **WiFiManager** con portal cautivo. Al primer arranque (o si no
+puede conectar a ninguna red conocida):
+
+1. El ESP32 crea un AP llamado **"EcowittKiosk"** (sin contraseña)
+2. Conéctate desde tu celular/laptop a ese AP
+3. Se abre automáticamente el portal de configuración (o ve a `192.168.4.1`)
+4. Configura:
+   - **Hasta 3 redes WiFi** (con fallback automático)
+   - **URL del servidor** (ej: `http://192.168.1.100:8080`)
+5. Guarda y el display se reinicia conectado
+
+Las credenciales se guardan en **NVS** (memoria no volátil) y persisten tras
+reinicios y reflasheos.
+
+### Forzar reconfiguración
+
+Si necesitas cambiar la configuración WiFi:
+- Borra la partición NVS con `pio run -t erase` antes de flashear, o
+- Modifica el código para llamar `wifi_config_reset()` y reflashea
+
 ## Estructura
 
 ```
 src/
   main.cpp          Orquestación (fetch → decode → swap; touch; BME280)
   config.h          Pines de hardware + struct del sensor
-  my_config.h       Credenciales (NO versionado; copiar del template)
+  my_config.h       Configuración (NO versionado; copiar del template)
+  wifi_config.h     WiFiManager + NVS (portal cautivo, 3 redes)
   rgb_lcd_port.*    Driver del panel RGB (esp_lcd nativo, sin LVGL)
   jpeg_render.h     JPEGDEC → framebuffer RGB565
   touch_input.h     GT911 sobre Wire + detección de tap
-  net.h             WiFi + GET del JPEG + POST del BME280
+  net.h             HTTP: GET del JPEG + POST del BME280
   bme280_sensor.h   Lectura del BME280 local
   io_extension.*    CH422G (reset touch, backlight)
   i2c.h             Wrapper I2C sobre Wire

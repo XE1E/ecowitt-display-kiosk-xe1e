@@ -5,34 +5,31 @@
  * src/my_config.h esta en .gitignore para proteger tus credenciales.
  *
  *   cp my_config.h.template src/my_config.h
+ *
+ * NOTA: Las credenciales WiFi y la URL del servidor se configuran via el
+ * portal cautivo de WiFiManager (no hace falta definirlas aqui). Al primer
+ * arranque (o si no conecta), el ESP32 crea un AP "EcowittKiosk" donde puedes
+ * configurar hasta 3 redes WiFi y la URL del servidor.
  */
 
 #ifndef MY_CONFIG_H
 #define MY_CONFIG_H
 
 // ============================================================================
-// WiFi (hasta 3 redes con fallback automatico; deja vacias las que no uses)
+// WiFiManager - Portal de configuracion
 // ============================================================================
-#define WIFI_SSID1      "TU_SSID"
-#define WIFI_PASSWORD1  "TU_PASSWORD"
+// Nombre del AP en modo configuracion (cuando no conecta a ninguna red).
+#define AP_NAME             "EcowittKiosk"
 
-#define WIFI_SSID2      ""
-#define WIFI_PASSWORD2  ""
+// Timeout del portal en segundos (0 = sin timeout, espera indefinidamente).
+#define PORTAL_TIMEOUT      180
 
-#define WIFI_SSID3      ""
-#define WIFI_PASSWORD3  ""
+// URL por defecto del servidor (se puede cambiar en el portal).
+#define DEFAULT_API_URL     "http://192.168.1.100:8080"
 
 // ============================================================================
-// Servidor Ecowitt
+// Refresco del display
 // ============================================================================
-// URL base (sin slash final). El firmware pedira:
-//   GET  {API_BASE_URL}/api/display.jpg?page=N
-//   POST {API_BASE_URL}/api/kiosk/local
-// USAR HTTP (no HTTPS): el handshake TLS en el ESP32 tarda ~1-2s por peticion.
-// Con HTTP directo (por IP, puerto 8080) el cambio de pagina es casi instantaneo.
-// La imagen es publica y no hay secretos. Ej: "http://<IP_DEL_SERVIDOR>:8080"
-#define API_BASE_URL    "http://192.168.1.100:8080"
-
 // Cada cuanto refrescar la imagen del display (ms). 60000 = 1 min.
 #define UPDATE_INTERVAL_MS  60000UL
 
