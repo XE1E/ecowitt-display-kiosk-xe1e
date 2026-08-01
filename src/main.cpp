@@ -23,6 +23,7 @@
 
 #include <Arduino.h>
 #include <Wire.h>
+#include <math.h>
 #include <esp_heap_caps.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -63,6 +64,68 @@ static const int TABBAR_H    = 64;
 static const int TAB_HIT_TOP = SCREEN_HEIGHT - 110;   // y >= 490 = barra
 
 static const size_t FB_BYTES = (size_t)SCREEN_WIDTH * SCREEN_HEIGHT * 2;  // RGB565
+
+// ── Spinner de carga ─────────────────────────────────────────────────────
+static const int SPINNER_CX = SCREEN_WIDTH / 2;   // centro X
+static const int SPINNER_CY = SCREEN_HEIGHT / 2;  // centro Y
+static const int SPINNER_R1 = 30;                 // radio interno
+static const int SPINNER_R2 = 50;                 // radio externo
+static const int SPINNER_SEGMENTS = 8;            // número de barras
+
+// Colores RGB565 para el degradado del spinner (de más brillante a más oscuro)
+static const uint16_t SPINNER_COLORS[SPINNER_SEGMENTS] = {
+    0xFFFF,  // blanco (barra activa)
+    0xDEFB,  // gris muy claro
+    0xBDF7,  // gris claro
+    0x9CF3,  // gris medio-claro
+    0x7BEF,  // gris medio
+    0x5AEB,  // gris medio-oscuro
+    0x39E7,  // gris oscuro
+    0x18E3,  // gris muy oscuro
+};
+
+// Dibuja un pixel en el framebuffer (con clipping)
+static inline void fb_pixel(uint16_t *fb, int x, int y, uint16_t color)
+{
+    if (x >= 0 && x < SCREEN_WIDTH && y >= 0 && y < SCREEN_HEIGHT)
+        fb[y * SCREEN_WIDTH + x] = color;
+}
+
+// Dibuja una línea gruesa desde (x0,y0) a (x1,y1)
+static void fb_thick_line(uint16_t *fb, int x0, int y0, int x1, int y1, uint16_t color, int thickness)
+{
+    int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+    int dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+    int err = dx + dy, e2;
+    int t = thickness / 2;
+
+    for (;;) {
+        for (int tx = -t; tx <= t; tx++)
+            for (int ty = -t; ty <= t; ty++)
+                fb_pixel(fb, x0 + tx, y0 + ty, color);
+        if (x0 == x1 && y0 == y1) break;
+        e2 = 2 * err;
+        if (e2 >= dy) { err += dy; x0 += sx; }
+        if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+}
+
+// Dibuja el spinner con la barra 'active' iluminada
+static void draw_spinner(uint16_t *fb, int active)
+{
+    for (int i = 0; i < SPINNER_SEGMENTS; i++) {
+        float angle = (float)i * 2.0f * 3.14159f / SPINNER_SEGMENTS - 3.14159f / 2.0f;
+        int x0 = SPINNER_CX + (int)(SPINNER_R1 * cosf(angle));
+        int y0 = SPINNER_CY + (int)(SPINNER_R1 * sinf(angle));
+        int x1 = SPINNER_CX + (int)(SPINNER_R2 * cosf(angle));
+        int y1 = SPINNER_CY + (int)(SPINNER_R2 * sinf(angle));
+
+        int color_idx = (i - active + SPINNER_SEGMENTS) % SPINNER_SEGMENTS;
+        fb_thick_line(fb, x0, y0, x1, y1, SPINNER_COLORS[color_idx], 6);
+    }
+}
+
+static volatile int g_spinner_frame = 0;  // frame actual del spinner
 
 // ── Estado compartido ────────────────────────────────────────────────────
 static uint16_t *g_fb[2]     = { nullptr, nullptr };  // los 2 framebuffers del panel
@@ -114,16 +177,31 @@ static bool page_is_cached(int page)
     return false;
 }
 
-// ── Oscurece la pantalla inmediatamente (llamar desde touch) ────────────────
-static void blackout_now()
+// ── Muestra pantalla negra con spinner (llamar desde touch) ─────────────────
+static void blackout_with_spinner()
 {
     int back = g_shownFb ^ 1;
     memset(g_fb[back], 0, FB_BYTES);
+    g_spinner_frame = 0;
+    draw_spinner(g_fb[back], g_spinner_frame);
     waveshare_fb_flush(g_fb[back], FB_BYTES);
     waveshare_wait_vsync(50);
     waveshare_swap_fb(g_fb[back]);
     g_shownFb = back;
     g_blackout = true;
+}
+
+// ── Avanza el spinner un frame ──────────────────────────────────────────────
+static void spinner_tick()
+{
+    int back = g_shownFb ^ 1;
+    memset(g_fb[back], 0, FB_BYTES);
+    g_spinner_frame = (g_spinner_frame + 1) % SPINNER_SEGMENTS;
+    draw_spinner(g_fb[back], g_spinner_frame);
+    waveshare_fb_flush(g_fb[back], FB_BYTES);
+    waveshare_wait_vsync(50);
+    waveshare_swap_fb(g_fb[back]);
+    g_shownFb = back;
 }
 
 // ── Muestra una pagina ──────────────────────────────────────────────────────
@@ -142,16 +220,21 @@ static void show(int page)
         }
     }
 
-    // No cacheada: oscurecer si no se hizo desde touch, luego cargar.
+    // No cacheada: mostrar spinner si no se hizo desde touch, luego cargar.
     if (!g_blackout) {
         int back = g_shownFb ^ 1;
         memset(g_fb[back], 0, FB_BYTES);
+        g_spinner_frame = 0;
+        draw_spinner(g_fb[back], g_spinner_frame);
         waveshare_fb_flush(g_fb[back], FB_BYTES);
         waveshare_wait_vsync(50);
         waveshare_swap_fb(g_fb[back]);
         g_shownFb = back;
     }
     g_blackout = false;
+
+    // Animar spinner mientras carga
+    spinner_tick();
 
     // Cargar la página en el FB de atrás y mostrar
     int back = g_shownFb ^ 1;
@@ -291,7 +374,7 @@ void loop()
         // Si hay cambio de página, oscurecer inmediatamente si no está en caché
         if (new_page > 0 && new_page != g_page) {
             if (!page_is_cached(new_page)) {
-                blackout_now();  // oscurecimiento instantáneo desde el touch
+                blackout_with_spinner();  // spinner instantáneo desde el touch
             }
             g_page = new_page;
             xSemaphoreGive(g_wake);
