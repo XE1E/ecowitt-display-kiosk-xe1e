@@ -49,11 +49,9 @@
 // PSRAM a 120MHz (CONFIG_SPIRAM_SPEED_120M, ver platformio.ini) el DMA no se
 // queda corto y la conmutacion es limpia, sin desfase ni puntitos.
 #define EXAMPLE_LCD_RGB_BUFFER_NUMS     (2)    ///< Number of frame buffers
-// Bounce buffer (necesario: sin el hay que bajar tanto el pclk que parpadea).
-// El DMA lee la PSRAM en rafagas a este buffer en SRAM. La copia del frame se
-// hace en trozos con micro-pausas (ver draw_page) para no saturar el bus PSRAM
-// y que el DMA no pierda sincronia.
-#define EXAMPLE_RGB_BOUNCE_BUFFER_SIZE  (EXAMPLE_LCD_H_RES * 10) ///< bounce buffer (px)
+// Bounce buffer: el DMA lee la PSRAM en rafagas a este buffer en SRAM.
+// Balance: 3 líneas - minimiza desplazamiento sin afectar mucho la velocidad.
+#define EXAMPLE_RGB_BOUNCE_BUFFER_SIZE  (EXAMPLE_LCD_H_RES * 3) ///< bounce buffer (px)
 
 /**
  * @brief GPIO Pins for RGB LCD Signals

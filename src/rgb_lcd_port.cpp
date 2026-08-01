@@ -151,15 +151,11 @@ void waveshare_fb_flush(void *addr, size_t bytes)
     esp_cache_msync(addr, bytes, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
 }
 
-// Espera el fin del frame actual y luego marca el swap del framebuffer para el
-// proximo vsync (SIN flush: se asume que el frame ya se sincronizo por trozos).
-// La espera garantiza que el swap ocurra al inicio del siguiente barrido, no en
-// medio de uno -> sin desplazamiento ni rayitas.
+// Marca el swap del framebuffer. El driver de ESP-IDF aplica el cambio en el
+// próximo vsync automáticamente cuando el puntero es uno de los framebuffers
+// internos del panel.
 void waveshare_swap_fb(void *fb)
 {
-    if (vsync_sem) {
-        xSemaphoreTake(vsync_sem, pdMS_TO_TICKS(20));
-    }
     esp_lcd_panel_draw_bitmap(panel_handle, 0, 0, EXAMPLE_LCD_H_RES, EXAMPLE_LCD_V_RES, fb);
 }
 

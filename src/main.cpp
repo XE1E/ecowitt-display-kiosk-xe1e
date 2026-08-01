@@ -92,6 +92,7 @@ static bool load_into(int fbIdx, int page)
     const size_t row_bytes = (size_t)SCREEN_WIDTH * 2;
     uint8_t *dst = (uint8_t *)g_fb[fbIdx];
     uint8_t *src = (uint8_t *)g_scratch;
+
     for (int y = 0; y < SCREEN_HEIGHT; y += CHUNK_ROWS) {
         int rows = min(CHUNK_ROWS, SCREEN_HEIGHT - y);
         size_t off = (size_t)y * row_bytes, n = (size_t)rows * row_bytes;
@@ -121,6 +122,8 @@ static void show(int page)
     // No cacheada: cargarla en el FB de atras y conmutar.
     int back = g_shownFb ^ 1;
     if (load_into(back, page)) {
+        // Esperar vsync para que el swap ocurra al inicio exacto del siguiente frame
+        waveshare_wait_vsync(50);
         waveshare_swap_fb(g_fb[back]);
         g_shownFb = back;
         g_shown = page;
@@ -150,6 +153,7 @@ static void netTask(void *)
             (g_fetched[g_shown] == 0 || now - g_fetched[g_shown] >= UPDATE_INTERVAL_MS)) {
             int back = g_shownFb ^ 1;
             if (load_into(back, g_shown)) {
+                waveshare_wait_vsync(50);
                 waveshare_swap_fb(g_fb[back]);
                 g_shownFb = back;
             }
