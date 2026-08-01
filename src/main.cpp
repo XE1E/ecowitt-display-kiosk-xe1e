@@ -73,6 +73,7 @@ static uint32_t  g_fetched[MAX_PAGE_ID + 1] = { 0 };  // millis del ultimo fetch
 
 static volatile int g_page  = 1;   // pagina deseada (la cambia el touch)
 static volatile int g_shown = 0;   // pagina mostrada actualmente
+static volatile bool g_blackout = false;  // true si ya se oscureció desde touch
 static SemaphoreHandle_t g_wake;   // despierta al netTask (tap o arranque)
 static SemaphoreHandle_t g_i2c;    // serializa el bus I2C (touch core1 + BME core0)
 
@@ -105,6 +106,26 @@ static bool load_into(int fbIdx, int page)
     return true;
 }
 
+// ── Verifica si una página está en caché ────────────────────────────────────
+static bool page_is_cached(int page)
+{
+    for (int i = 0; i < 2; i++)
+        if (g_fbPage[i] == page) return true;
+    return false;
+}
+
+// ── Oscurece la pantalla inmediatamente (llamar desde touch) ────────────────
+static void blackout_now()
+{
+    int back = g_shownFb ^ 1;
+    memset(g_fb[back], 0, FB_BYTES);
+    waveshare_fb_flush(g_fb[back], FB_BYTES);
+    waveshare_wait_vsync(50);
+    waveshare_swap_fb(g_fb[back]);
+    g_shownFb = back;
+    g_blackout = true;
+}
+
 // ── Muestra una pagina ──────────────────────────────────────────────────────
 static void show(int page)
 {
@@ -116,13 +137,25 @@ static void show(int page)
             waveshare_swap_fb(g_fb[i]);
             g_shownFb = i;
             g_shown = page;
+            g_blackout = false;
             return;
         }
     }
-    // No cacheada: cargarla en el FB de atras y conmutar.
+
+    // No cacheada: oscurecer si no se hizo desde touch, luego cargar.
+    if (!g_blackout) {
+        int back = g_shownFb ^ 1;
+        memset(g_fb[back], 0, FB_BYTES);
+        waveshare_fb_flush(g_fb[back], FB_BYTES);
+        waveshare_wait_vsync(50);
+        waveshare_swap_fb(g_fb[back]);
+        g_shownFb = back;
+    }
+    g_blackout = false;
+
+    // Cargar la página en el FB de atrás y mostrar
     int back = g_shownFb ^ 1;
     if (load_into(back, page)) {
-        // Esperar vsync para que el swap ocurra al inicio exacto del siguiente frame
         waveshare_wait_vsync(50);
         waveshare_swap_fb(g_fb[back]);
         g_shownFb = back;
@@ -237,21 +270,31 @@ void loop()
     xSemaphoreGive(g_i2c);
 
     if (tapped) {
+        int new_page = 0;
+
         if (g_shown == PAGE_CONSOLA) {
             // Consola (full-screen, sin barra): un toque en CUALQUIER parte regresa
             // a la página 1 (principal).
             Serial.printf("[touch] consola x=%u y=%u -> pagina 1\n", tx, ty);
-            if (g_page != 1) { g_page = 1; xSemaphoreGive(g_wake); }
+            new_page = 1;
         } else if (ty >= TAB_HIT_TOP) {
             // Barra de NUM_TABS pestañas: las 5 numeradas + "Consola" (la última).
             int idx = (int)((uint32_t)tx * NUM_TABS / SCREEN_WIDTH);   // 0..NUM_TABS-1
             if (idx < 0) idx = 0;
             if (idx >= NUM_TABS) idx = NUM_TABS - 1;
-            int p = (idx == NUM_TABS - 1) ? PAGE_CONSOLA : (idx + 1);
-            Serial.printf("[touch] tab x=%u y=%u -> pagina %d\n", tx, ty, p);
-            if (p != g_page) { g_page = p; xSemaphoreGive(g_wake); }
+            new_page = (idx == NUM_TABS - 1) ? PAGE_CONSOLA : (idx + 1);
+            Serial.printf("[touch] tab x=%u y=%u -> pagina %d\n", tx, ty, new_page);
         } else {
             Serial.printf("[touch] x=%u y=%u (fuera de la barra)\n", tx, ty);
+        }
+
+        // Si hay cambio de página, oscurecer inmediatamente si no está en caché
+        if (new_page > 0 && new_page != g_page) {
+            if (!page_is_cached(new_page)) {
+                blackout_now();  // oscurecimiento instantáneo desde el touch
+            }
+            g_page = new_page;
+            xSemaphoreGive(g_wake);
         }
     }
     delay(5);
