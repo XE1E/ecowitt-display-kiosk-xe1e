@@ -11,8 +11,9 @@
  * Framebuffers: el panel tiene 2. Se usan como cache de las 2 ultimas paginas
  * distintas mostradas. Volver a una pagina que sigue en un FB = swap PURO (sin
  * escribir PSRAM -> sin contencion -> transicion 100% limpia). Ir a una pagina
- * nueva la decodifica en el FB de atras (breve brinca al escribir el frame, solo
- * en ese tap). El refresco de datos recarga el FB mostrado (brinca, poco seguido).
+ * nueva la decodifica en el FB de atras. El swap espera vsync para alinearse con
+ * el inicio del barrido -> sin tearing ni desplazamiento. El refresco de datos
+ * tambien escribe al FB de atras y hace swap (true double buffering).
  *
  * Tareas: core 1 (loop) sondea el touch; core 0 (netTask) baja/decodifica/pinta
  * y envia el BME280.
@@ -142,13 +143,15 @@ static void netTask(void *)
         // Cambio de pagina (tap en una pestaña).
         if (page != g_shown) show(page);
 
-        // Refresco de datos de la pagina mostrada, si esta vieja: recarga su
-        // propio FB (actualiza en vivo; breve brinca, poco seguido).
+        // Refresco de datos de la pagina mostrada, si esta vieja: escribe al FB
+        // de atras y hace swap (true double buffering -> sin tearing ni rayitas).
         uint32_t now = millis();
         if (g_shown >= 1 &&
             (g_fetched[g_shown] == 0 || now - g_fetched[g_shown] >= UPDATE_INTERVAL_MS)) {
-            for (int i = 0; i < 2; i++) {
-                if (g_fbPage[i] == g_shown) { load_into(i, g_shown); break; }
+            int back = g_shownFb ^ 1;
+            if (load_into(back, g_shown)) {
+                waveshare_swap_fb(g_fb[back]);
+                g_shownFb = back;
             }
         }
 
