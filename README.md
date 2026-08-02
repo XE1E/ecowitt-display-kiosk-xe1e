@@ -99,6 +99,10 @@ docs/
   ARQUITECTURA.md   Detalle del diseño y decisiones
 ```
 
+## Impresión 3D
+
+**Gabinete** para la pantalla Waveshare: archivo STL en [`3d-prints/enclosure/`](3d-prints/enclosure/) y en [Printables](https://www.printables.com/model/1306944-waveshare-esp32-s3-7inch-capacitive-touch-display).
+
 ## Estado
 
 Ver [`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md) para el detalle y los puntos
