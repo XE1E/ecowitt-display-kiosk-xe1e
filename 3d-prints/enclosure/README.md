@@ -1,5 +1,7 @@
 # Gabinete para Waveshare ESP32-S3 Touch LCD 7"
 
+<img src="enclosure.jpg" alt="Enclosure" width="300">
+
 Gabinete imprimible en 3D para la pantalla **Waveshare ESP32-S3-Touch-LCD-7B** (1024x600).
 
 ## Compatibilidad
