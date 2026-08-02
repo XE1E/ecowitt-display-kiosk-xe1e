@@ -35,9 +35,15 @@ Diseño disponible en Printables: [Waveshare ESP32-S3 7inch Capacitive Touch Dis
 3. Conecta el cable USB-C para alimentación
 4. Opcionalmente, monta en pared o coloca sobre una superficie
 
+## Extensión USB-C requerida
+
+<img src="usb-extension.jpg" alt="USB-C Extension" width="300">
+
+El gabinete requiere una **extensión de cable USB-C** (macho-hembra, ~15-20 cm) para conectar la alimentación, ya que el puerto USB-C de la pantalla queda dentro del gabinete.
+
 ## Notas
 
-- El diseño permite acceso al puerto USB-C y ranura microSD
+- El diseño permite acceso al puerto USB-C (con extensión) y ranura microSD
 - Verifica las dimensiones antes de imprimir si tu pantalla tiene variantes
 
 ## Licencia
