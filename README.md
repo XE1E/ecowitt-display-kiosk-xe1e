@@ -55,8 +55,22 @@ pio run -t upload
 pio device monitor
 ```
 
-Ajusta la altitud de tu sitio en `src/config.h` (`BME280_ALTITUDE`, por defecto
-2240 m para CDMX) para que la presión se corrija a nivel del mar.
+Solo el **primer** flasheo necesita cable: después se puede actualizar por
+**OTA** desde la página de configuración, subiendo
+`.pio/build/esp32s3/firmware.bin` (o con `curl`):
+
+```bash
+pio run                                    # genera el .bin, sin subirlo
+curl -F "fw=@.pio/build/esp32s3/firmware.bin" http://<IP-del-display>/api/ota
+```
+
+El `.bin` se escribe en la partición inactiva (`app0`/`app1`, 6.5 MB cada una).
+Si la subida se corta, `otadata` no se conmuta y el display sigue arrancando con
+el firmware anterior.
+
+La altitud del sitio (para corregir la presión a nivel del mar) se ajusta desde
+la página de configuración; `BME280_ALTITUDE` en `src/config.h` es solo el valor
+del primer arranque (2240 m, CDMX).
 
 ## Configuración (página web del display)
 
@@ -82,8 +96,10 @@ Qué se puede configurar:
   guardar
 - **Brillo** (1–10) e **intervalo de refresco** (1–15 min) — se aplican sin
   reiniciar
-- **BME280**: habilitado, intervalo de envío y **offsets de calibración**
-  (temp/hum/presión) — también en vivo, así se calibra sin reflashear
+- **BME280**: habilitado, intervalo de envío, **altitud del sitio** y **offsets de
+  calibración** (temp/hum/presión) — también en vivo, así se calibra sin reflashear
+- **Firmware (OTA)**: sube el `firmware.bin` desde el navegador, sin abrir el
+  gabinete ni conectar el cable
 - **Mantenimiento**: forzar refresco, reiniciar y borrar configuración
 
 Lo que cambia WiFi o URL reinicia el display; el resto se aplica al instante.

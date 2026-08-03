@@ -14,6 +14,7 @@
 
 #include <Arduino.h>
 #include <Preferences.h>
+#include "config.h"
 #include "my_config.h"
 
 // ── Defaults (sobreescribibles desde my_config.h) ────────────────────────────
@@ -47,6 +48,9 @@
 #ifndef BME280_PRESS_OFFSET
 #define BME280_PRESS_OFFSET 0.0f
 #endif
+#ifndef BME280_ALTITUDE
+#define BME280_ALTITUDE 0            // metros; 0 = presion absoluta, sin corregir
+#endif
 
 // ── Namespace y claves NVS (max 15 caracteres por clave) ─────────────────────
 static const char *NVS_NAMESPACE = "wificfg";
@@ -63,6 +67,7 @@ struct KioskSettings {
     uint8_t  update_min;      // 1..15
     bool     bme_enabled;
     uint16_t bme_interval;    // segundos, 60..3600
+    uint16_t altitude;        // metros del sitio, 0..6000 (0 = presion absoluta)
     float    off_temp;        // grados C
     float    off_hum;         // %
     float    off_press;       // hPa
@@ -108,6 +113,7 @@ inline void settings_load()
     g_set.update_min   = _clamp_u8(p.getUChar("upd_min",  DEFAULT_UPDATE_MIN), 1, 15);
     g_set.bme_enabled  = p.getBool("bme_en", BME280_ENABLED ? true : false);
     g_set.bme_interval = (uint16_t)constrain((long)p.getUShort("bme_int", REMOTE_STATION_INTERVAL), 60L, 3600L);
+    g_set.altitude     = (uint16_t)constrain((long)p.getUShort("alt", BME280_ALTITUDE), 0L, 6000L);
     // Los floats se consultan con isKey() primero: Preferences::getFloat() de una
     // clave inexistente FUNCIONA (devuelve el default) pero escupe un
     // "[E] nvs_get_blob len fail: off_t NOT_FOUND" en el serial que parece un
@@ -160,12 +166,13 @@ inline void settings_save_sensor()
     p.begin(NVS_NAMESPACE, false);
     p.putBool("bme_en", g_set.bme_enabled);
     p.putUShort("bme_int", g_set.bme_interval);
+    p.putUShort("alt", g_set.altitude);
     p.putFloat("off_t", g_set.off_temp);
     p.putFloat("off_h", g_set.off_hum);
     p.putFloat("off_p", g_set.off_press);
     p.end();
-    Serial.printf("[set] BME280: en=%d int=%us offs=%.1f/%.1f/%.1f\n",
-                  g_set.bme_enabled, g_set.bme_interval,
+    Serial.printf("[set] BME280: en=%d int=%us alt=%um offs=%.1f/%.1f/%.1f\n",
+                  g_set.bme_enabled, g_set.bme_interval, g_set.altitude,
                   g_set.off_temp, g_set.off_hum, g_set.off_press);
 }
 

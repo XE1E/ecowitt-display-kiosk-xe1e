@@ -20,6 +20,13 @@ static bool bmeInitialized = false;
 static float bmePressureOffset = 0;     // Offset de calibracion en hPa
 static float bmeTemperatureOffset = 0;  // Offset de calibracion en grados C
 static float bmeHumidityOffset = 0;     // Offset de calibracion en %
+static float bmeAltitude = 0;           // Altitud del sitio en m; 0 = presion absoluta
+
+// Altitud del sitio, para corregir la presion a nivel del mar. En 0 se reporta
+// la presion absoluta, sin corregir. Configurable desde el portal.
+void setBME280Altitude(float meters) {
+    bmeAltitude = meters;
+}
 
 // Setters para los offsets (llamar desde main al arrancar)
 void setBME280PressureOffset(float offset) {
@@ -86,16 +93,16 @@ bool readBME280(LocalSensorData& data) {
     // Leer presion absoluta y convertir a presion relativa (nivel del mar)
     float pressure_abs = bme.readPressure() / 100.0F;  // hPa
 
-#ifdef BME280_ALTITUDE
-    // Formula barometrica con compensacion de temperatura
-    // P0 = P * (1 + 0.0065*h / (T + 0.0065*h + 273.15))^5.257
-    float h = (float)BME280_ALTITUDE;
-    float T = data.temperature;  // Usar temperatura medida
-    float exponent = (9.80665f * 0.0289644f) / (8.31447f * 0.0065f);  // ~5.257
-    data.pressure = pressure_abs * pow(1.0f + (0.0065f * h) / (T + 273.15f), exponent);
-#else
-    data.pressure = pressure_abs;
-#endif
+    if (bmeAltitude >= 1.0f) {
+        // Formula barometrica con compensacion de temperatura
+        // P0 = P * (1 + 0.0065*h / (T + 0.0065*h + 273.15))^5.257
+        float h = bmeAltitude;
+        float T = data.temperature;  // Usar temperatura medida
+        float exponent = (9.80665f * 0.0289644f) / (8.31447f * 0.0065f);  // ~5.257
+        data.pressure = pressure_abs * pow(1.0f + (0.0065f * h) / (T + 273.15f), exponent);
+    } else {
+        data.pressure = pressure_abs;   // altitud 0 = sin corregir
+    }
 
     // Aplicar offset de calibracion
     data.pressure += bmePressureOffset;

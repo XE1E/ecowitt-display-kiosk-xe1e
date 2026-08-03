@@ -287,6 +287,13 @@ static void netTask(void *)
     for (;;) {
         xSemaphoreTake(g_wake, pdMS_TO_TICKS(500));
 
+        // OTA en curso: no bajar ni pintar nada. Escribir la flash mientras este
+        // core mueve un JPEG por el bus de PSRAM solo alarga la subida.
+        if (g_ota_active) {
+            delay(200);
+            continue;
+        }
+
         // Toque largo: pantalla de info con la IP y la URL del portal. Se dibuja
         // AQUI (core 0) y no en el loop del touch, para que solo una tarea toque
         // los framebuffers. Se queda 15 s o hasta que se toque una pestaña.
@@ -384,6 +391,7 @@ void setup()
     // reportar si responde); que se ENVIE al servidor depende de g_set.bme_enabled.
     touch_input_begin();
     initBME280(BME280_I2C_ADDR);
+    setBME280Altitude((float)g_set.altitude);
     setBME280TemperatureOffset(g_set.off_temp);
     setBME280HumidityOffset(g_set.off_hum);
     setBME280PressureOffset(g_set.off_press);

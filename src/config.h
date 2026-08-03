@@ -17,7 +17,7 @@
 #include <Arduino.h>
 
 // Version del firmware (se muestra en el bloque "Estado" del portal web).
-#define FW_VERSION "1.1.0"
+#define FW_VERSION "1.2.0"
 
 // ============================================================================
 // I2C (bus compartido: CH422G + GT911 + BME280)
@@ -34,7 +34,8 @@
 // BME280_ADDRESS que define la libreria Adafruit.
 #define BME280_I2C_ADDR 0x76
 // Altitud del sitio en metros, para corregir la presion a nivel del mar.
-// CDMX ~2240 m. Ajustar segun tu ubicacion (o comentar para presion absoluta).
+// CDMX ~2240 m. Solo es el DEFAULT del primer arranque: la altitud real se edita
+// desde el portal web y vive en NVS. En 0 se reporta la presion absoluta.
 #define BME280_ALTITUDE 2240
 
 // ============================================================================

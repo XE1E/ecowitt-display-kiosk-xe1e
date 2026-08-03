@@ -22,4 +22,8 @@ struct KioskStatus {
 
 static KioskStatus g_status = { 0, 0, 0, 0, 0, 0 };
 
+// Actualizacion OTA en curso: lo pone portal.h mientras recibe el .bin y lo lee
+// netTask para no bajar ni pintar paginas durante la escritura de la flash.
+static volatile bool g_ota_active = false;
+
 #endif // STATUS_H

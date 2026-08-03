@@ -27,6 +27,7 @@
 #include <WebServer.h>
 #include <DNSServer.h>
 #include <HTTPClient.h>
+#include <Update.h>
 
 #include "config.h"
 #include "settings.h"
@@ -114,6 +115,10 @@ td:first-child{color:var(--mut);width:44%}
 .msg{margin-top:10px;font-size:13px;min-height:18px}
 .msg.ok{color:var(--ok)} .msg.bad{color:var(--bad)}
 .hint{font-size:12px;color:var(--mut);margin-top:6px}
+.warn{font-size:12px;color:#fbbf24;margin-top:6px}
+.bar{display:none;height:8px;background:#0d1117;border:1px solid var(--line);border-radius:4px;margin-top:10px;overflow:hidden}
+.bar span{display:block;height:100%;width:0;background:var(--acc);transition:width .2s}
+input[type=file]{padding:7px}
 </style></head><body><div class="wrap">
 <h1>Ecowitt Display Kiosk</h1>
 <div class="sub" id="mode">Cargando...</div>
@@ -167,6 +172,11 @@ td:first-child{color:var(--mut);width:44%}
 <select id="bmeen"><option value="1">Habilitado</option><option value="0">Deshabilitado</option></select>
 <label>Intervalo de env&iacute;o (segundos, 60-3600)</label>
 <input id="bmeint" type="number" min="60" max="3600" step="10">
+<label>Altitud del sitio (metros)</label>
+<input id="alt" type="number" min="0" max="6000" step="10">
+<div class="hint">La altitud corrige la presi&oacute;n a nivel del mar (CDMX ~2240 m). En 0 se
+reporta la presi&oacute;n absoluta, sin corregir. Ojo: subir la altitud SUBE la presi&oacute;n
+reportada, as&iacute; que si la ajustas hay que revisar el offset de presi&oacute;n.</div>
 <div class="hint">Offsets de calibraci&oacute;n: se SUMAN a la lectura cruda. Si el sensor marca 29.7 y el real es 25, el offset es -4.7.</div>
 <div class="grid">
 <div><label>Temp (&deg;C)</label><input id="offt" type="number" step="0.1"></div>
@@ -175,6 +185,18 @@ td:first-child{color:var(--mut);width:44%}
 <label>Presi&oacute;n (hPa)</label><input id="offp" type="number" step="0.1">
 <div class="row"><button onclick="saveSensor()">Guardar</button></div>
 <div class="msg" id="bmsg"></div>
+</section>
+
+<section><h2>Firmware (OTA)</h2>
+<div class="hint">Sube el <b>firmware.bin</b> que genera <code>pio run</code> en
+<code>.pio/build/esp32s3/</code>. Se escribe en la particion inactiva: si la subida
+falla o se corta, el display sigue arrancando con el firmware actual.</div>
+<input id="fw" type="file" accept=".bin">
+<div class="row"><button onclick="ota()">Actualizar y reiniciar</button></div>
+<div class="bar" id="obar"><span id="obarf"></span></div>
+<div class="msg" id="omsg"></div>
+<div class="warn">No apagues el display durante la actualizaci&oacute;n. La pantalla
+se queda con la p&aacute;gina actual y no responde al toque mientras dura.</div>
 </section>
 
 <section><h2>Mantenimiento</h2>
@@ -217,7 +239,7 @@ function loadSettings(){
     var sel=$('updmin');sel.innerHTML='';
     for(var i=1;i<=15;i++){var o=document.createElement('option');o.value=i;
       o.text=i+(i==1?' minuto':' minutos');if(i==c.upd)o.selected=true;sel.appendChild(o)}
-    $('bmeen').value=c.bme?'1':'0';$('bmeint').value=c.bmeint;
+    $('bmeen').value=c.bme?'1':'0';$('bmeint').value=c.bmeint;$('alt').value=c.alt;
     $('offt').value=c.offt;$('offh').value=c.offh;$('offp').value=c.offp;
   }).catch(function(){});
 }
@@ -278,11 +300,38 @@ function saveDisplay(){
 }
 
 function saveSensor(){
-  var q='en='+$('bmeen').value+'&int='+$('bmeint').value+
+  var q='en='+$('bmeen').value+'&int='+$('bmeint').value+'&alt='+$('alt').value+
     '&offt='+$('offt').value+'&offh='+$('offh').value+'&offp='+$('offp').value;
   post('/api/save/sensor',q).then(function(r){return r.text()}).then(function(){
     msg('bmsg','Guardado y aplicado.',true)
   }).catch(function(){msg('bmsg','Error al guardar',false)});
+}
+
+// OTA: XMLHttpRequest en vez de fetch porque solo XHR reporta progreso de subida.
+function ota(){
+  var f=$('fw').files[0];
+  if(!f){msg('omsg','Selecciona el archivo firmware.bin',false);return}
+  if(!/\.bin$/i.test(f.name)){msg('omsg','El archivo debe ser un .bin',false);return}
+  if(!confirm('Actualizar el firmware con '+f.name+' ('+(f.size/1024).toFixed(0)+' KB)?'))return;
+  var fd=new FormData();fd.append('fw',f,f.name);
+  var x=new XMLHttpRequest();
+  $('obar').style.display='block';
+  x.upload.onprogress=function(e){
+    if(!e.lengthComputable)return;
+    var p=Math.round(e.loaded/e.total*100);
+    $('obarf').style.width=p+'%';
+    msg('omsg',p<100?'Subiendo '+p+'%':'Escribiendo la flash, espera...');
+  };
+  x.onload=function(){
+    if(x.status===200&&x.responseText.indexOf('OK')===0){
+      $('obarf').style.width='100%';
+      msg('omsg','Firmware actualizado. El display se esta reiniciando; recarga esta pagina en ~15 s.',true);
+    }else{
+      msg('omsg','Fallo: '+(x.responseText||('HTTP '+x.status)),false);
+    }
+  };
+  x.onerror=function(){msg('omsg','Se corto la conexion durante la subida',false)};
+  x.open('POST','/api/ota');x.send(fd);
 }
 
 loadStatus();loadSettings();setInterval(loadStatus,5000);
@@ -332,6 +381,7 @@ static void _h_settings()
     j += ",\"upd\":";    j += String(g_set.update_min);
     j += ",\"bme\":";    j += g_set.bme_enabled ? "true" : "false";
     j += ",\"bmeint\":"; j += String(g_set.bme_interval);
+    j += ",\"alt\":";    j += String(g_set.altitude);
     j += ",\"offt\":";   j += String(g_set.off_temp, 1);
     j += ",\"offh\":";   j += String(g_set.off_hum, 1);
     j += ",\"offp\":";   j += String(g_set.off_press, 1);
@@ -461,12 +511,14 @@ static void _h_save_sensor()
     settings_load();
     g_set.bme_enabled  = _srv.arg("en").toInt() != 0;
     g_set.bme_interval = (uint16_t)constrain(_srv.arg("int").toInt(), 60L, 3600L);
+    g_set.altitude     = (uint16_t)constrain(_srv.arg("alt").toInt(), 0L, 6000L);
     g_set.off_temp     = _clamp_f(_srv.arg("offt").toFloat(),  -50.0f, 50.0f);
     g_set.off_hum      = _clamp_f(_srv.arg("offh").toFloat(),   -50.0f, 50.0f);
     g_set.off_press    = _clamp_f(_srv.arg("offp").toFloat(), -200.0f, 200.0f);
     settings_save_sensor();
 
-    // Los offsets se aplican al vuelo, sin reiniciar (asi se calibra en vivo).
+    // Altitud y offsets se aplican al vuelo, sin reiniciar (para calibrar en vivo).
+    setBME280Altitude((float)g_set.altitude);
     setBME280TemperatureOffset(g_set.off_temp);
     setBME280HumidityOffset(g_set.off_hum);
     setBME280PressureOffset(g_set.off_press);
@@ -495,6 +547,69 @@ static void _h_refresh()
     if (_on_display_change) _on_display_change();
 }
 
+// ── OTA ──────────────────────────────────────────────────────────────────────
+// Actualizacion por web. La tabla de particiones (default_16MB.csv) ya trae
+// otadata + app0/app1 de 6.5 MB, asi que el .bin se escribe SIEMPRE en la
+// particion inactiva: si la subida se corta a medias, otadata no se conmuta y el
+// display vuelve a arrancar con el firmware actual. Solo al cerrar bien
+// (Update.end) se marca la nueva particion como arrancable.
+
+// Se llama cuando ya se recibio todo el cuerpo del POST.
+static void _h_ota_done()
+{
+    bool ok = !Update.hasError();
+    _srv.sendHeader("Connection", "close");
+    _srv.send(200, "text/plain", ok ? "OK" : (String("FAIL: ") + Update.errorString()));
+    g_ota_active = false;
+
+    if (ok) {
+        Serial.println("[ota] actualizado, reiniciando");
+        _srv.client().flush();
+        delay(600);
+        ESP.restart();
+    }
+}
+
+// Millis del ultimo trozo recibido, para el guardia de subida colgada.
+static uint32_t _ota_last_activity = 0;
+static const uint32_t OTA_STALL_MS = 30000;
+
+// Se llama por trozos mientras llega el archivo.
+static void _h_ota_upload()
+{
+    HTTPUpload &up = _srv.upload();
+    _ota_last_activity = millis();
+
+    switch (up.status) {
+    case UPLOAD_FILE_START:
+        Serial.printf("[ota] recibiendo '%s'\n", up.filename.c_str());
+        // Pausa a netTask: escribir la flash mientras el otro core baja y
+        // decodifica un JPEG solo alarga la subida y suma riesgo.
+        g_ota_active = true;
+        if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+            Update.printError(Serial);
+            g_ota_active = false;
+        }
+        break;
+
+    case UPLOAD_FILE_WRITE:
+        if (Update.isRunning() && Update.write(up.buf, up.currentSize) != up.currentSize)
+            Update.printError(Serial);
+        break;
+
+    case UPLOAD_FILE_END:
+        if (Update.end(true)) Serial.printf("[ota] escrito: %u bytes\n", (unsigned)up.totalSize);
+        else                  Update.printError(Serial);
+        break;
+
+    default:   // UPLOAD_FILE_ABORTED
+        Update.abort();
+        g_ota_active = false;
+        Serial.println("[ota] abortado");
+        break;
+    }
+}
+
 // Sondas de deteccion de portal cautivo: cualquier 302 hace que el sistema
 // operativo abra la pagina. En modo STA, un 404 normal.
 static void _h_not_found()
@@ -521,6 +636,9 @@ static void _register_handlers()
     _srv.on("/api/restart",       HTTP_POST, _h_restart);
     _srv.on("/api/factory",       HTTP_POST, _h_factory);
     _srv.on("/api/refresh",       HTTP_POST, _h_refresh);
+    // OTA: el 3er argumento es el handler de subida (se llama por trozos); el 2o
+    // corre cuando ya llego todo el cuerpo.
+    _srv.on("/api/ota",           HTTP_POST, _h_ota_done, _h_ota_upload);
     _srv.onNotFound(_h_not_found);
 }
 
@@ -543,6 +661,17 @@ inline void portal_handle()
     if (!_portal_up) return;
     if (_portal_is_ap) _dns.processNextRequest();
     _srv.handleClient();
+
+    // Guardia de subida colgada: si el cliente desaparece a media subida (se
+    // cierra el navegador, se cae el WiFi), WebServer corta por su propio
+    // timeout y vuelve de handleClient() SIN llamar a UPLOAD_FILE_ABORTED. Sin
+    // esto, g_ota_active se quedaria en true y netTask no volveria a refrescar
+    // ninguna pagina hasta el siguiente reinicio.
+    if (g_ota_active && millis() - _ota_last_activity > OTA_STALL_MS) {
+        Update.abort();
+        g_ota_active = false;
+        Serial.println("[ota] subida sin avance, cancelada (firmware anterior intacto)");
+    }
 }
 
 /**
@@ -573,10 +702,11 @@ inline void portal_run_ap(bool wait_forever)
     uint32_t t0 = millis();
     uint32_t limit = (uint32_t)PORTAL_TIMEOUT * 1000UL;
     for (;;) {
-        _dns.processNextRequest();
-        _srv.handleClient();
+        portal_handle();             // incluye el DNS y el guardia de OTA colgado
         if (_portal_saved) break;    // (no deberia llegar: _h_save_wifi reinicia)
-        if (!wait_forever && PORTAL_TIMEOUT > 0 && millis() - t0 > limit) {
+        // El timeout NO debe dispararse a media escritura de la flash: reiniciar
+        // ahi dejaria la actualizacion incompleta.
+        if (!g_ota_active && !wait_forever && PORTAL_TIMEOUT > 0 && millis() - t0 > limit) {
             Serial.println("[portal] timeout del portal, reiniciando");
             delay(200);
             ESP.restart();
