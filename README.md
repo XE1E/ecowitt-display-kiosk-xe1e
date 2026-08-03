@@ -11,23 +11,44 @@ En lugar de dibujar la interfaz en el ESP32 (LVGL, fuentes, iconos, layout…), 
 *display tonto*:
 
 1. Baja el JPEG por WiFi: `GET /api/display.jpg?page=N`
-2. Lo decodifica (JPEGDEC) sobre el **framebuffer de atrás** (RGB565)
-3. Hace **swap** de framebuffer (doble buffer + bounce buffer) → **sin tearing**
-4. Lee el **touch** (GT911): un *tap* cambia de página
+2. Lo decodifica (JPEGDEC) en un buffer de PSRAM y lo copia al **framebuffer de
+   atrás** (RGB565), aplicando el **brillo** configurado
+3. Hace **swap** de framebuffer alineado a **vsync** (doble buffer + bounce
+   buffer) → **sin tearing ni desplazamiento**
+4. Lee el **touch** (GT911) y mapea el toque a la pestaña correspondiente
 5. Envía su **BME280** local al servidor (`POST /api/kiosk/local`); el servidor
    lo dibuja en la página 2
+
+Los dos framebuffers del panel se usan además como **caché de las 2 últimas
+páginas distintas**: volver a una que sigue en un framebuffer es un swap puro,
+sin escribir PSRAM, así que la transición es perfectamente limpia. Al ir a una
+página que no está en caché se muestra un **spinner** mientras se baja.
 
 Ventajas: el diseño se edita en el servidor (React), no hay que recompilar el
 firmware para cambiar la UI, y se elimina toda la complejidad de LVGL.
 
 ## Páginas
 
-| Página | URL en el servidor        | Contenido                              |
-|--------|---------------------------|----------------------------------------|
-| 1      | `/kiosko?page=1`          | Estación: temp, tiles, pronóstico 6 h  |
-| 2      | `/kiosko?page=2`          | Sensor local BME280 (este display)     |
+El servidor dibuja una **barra de pestañas** de 64 px en la franja inferior. El
+firmware mapea la X del toque a la pestaña y salta a esa página; la franja
+tocable es más alta que la barra visible (los últimos 110 px) para no fallar el
+toque.
 
-Un *tap* en la pantalla avanza a la siguiente página (1 → 2 → 1…).
+| Pestaña | Página          | URL del renderer        | Contenido                                                     |
+|---------|-----------------|-------------------------|---------------------------------------------------------------|
+| ☀️ Estación | 1           | `/kiosko?page=1`        | Temperatura grande, 6 tiles (humedad, presión, viento, lluvia, UV, IMECA) y pronóstico 6 h |
+| 📍 Local    | 2           | `/kiosko?page=2`        | Sensor BME280 de **este** display, con mín/máx                 |
+| 🏠 Sensores | 3           | `/kiosko?page=3`        | Sensores interior / jardín / estación remota (GW1100)          |
+| 📅 7 días   | 4           | `/kiosko?page=4`        | Pronóstico a 7 días                                            |
+| 📈 48 h     | 5           | `/kiosko?page=5`        | Resumen multivariable: temperatura, presión, lluvia, viento y humedad de las últimas 48 h |
+| 🖥️ Consola  | `consola`   | `/kiosko?page=consola`  | Réplica de la consola física Ecowitt, **pantalla completa sin barra** |
+
+La consola es especial: al no tener barra de pestañas, un toque en **cualquier
+parte** regresa a la página 1. Su URL usa `?page=consola`, no un número.
+
+> El orden y el número de pestañas tienen que coincidir entre el array `TABS`
+> del dashboard y `NUM_TABS` / `PAGE_CONSOLA` en [`src/config.h`](src/config.h).
+> Si se agrega una página hay que tocar ambos lados.
 
 ## Hardware
 
@@ -40,6 +61,10 @@ Un *tap* en la pantalla avanza a la siguiente página (1 → 2 → 1…).
 
 I2C compartido en **GPIO 8 (SDA) / 9 (SCL)**. Pines del panel RGB en
 [`src/rgb_lcd_port.h`](src/rgb_lcd_port.h) / [`src/config.h`](src/config.h).
+
+El backlight cuelga del CH422G (IO2), que es un expansor **digital**: no tiene
+PWM, así que no se puede atenuar por hardware. Por eso el brillo se aplica
+escalando los píxeles al copiarlos al framebuffer.
 
 ## Compilar y flashear (PlatformIO)
 
@@ -129,11 +154,15 @@ src/
   jpeg_render.h     JPEGDEC → framebuffer RGB565
   touch_input.h     GT911 sobre Wire + detección de tap
   net.h             HTTP: GET del JPEG + POST del BME280
-  bme280_sensor.h   Lectura del BME280 local
+  bme280_sensor.h   Lectura del BME280 local (altitud y offsets en runtime)
   io_extension.*    CH422G (reset touch, backlight)
   i2c.h             Wrapper I2C sobre Wire
 docs/
-  ARQUITECTURA.md   Detalle del diseño y decisiones
+  ARQUITECTURA.md      Detalle del diseño y decisiones
+  DISPLAY_ISSUES.md    Problemas del panel RGB (tearing, rayitas) y su solución
+  PLAN-CONSOLA-XE1E.md Plan de la página "consola"
+stubs/              Header vacío de esp-dsp (JPEGDEC con -DNO_SIMD)
+3d-prints/          Gabinete imprimible (STL + fotos)
 ```
 
 ## Impresión 3D
@@ -142,9 +171,15 @@ docs/
 
 ## Estado
 
-Ver [`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md) para el detalle y los puntos
-que faltan por validar en hardware real (endianness del JPEG, semántica exacta
-del swap de framebuffer, secuencia de reset del GT911).
+Firmware **v1.2.0**, funcionando en hardware. Validado en la placa: decodificado
+y pintado del JPEG, swap de framebuffer sin tearing, reset y lectura del GT911,
+navegación por pestañas, BME280, portal de configuración (modo AP y LAN),
+escaneo de redes, brillo, offsets en vivo y actualización por OTA.
 
-El lado servidor (renderer + endpoint `/api/kiosk/local`) ya está desplegado y
-verificado en `https://clima.xe1e.net`.
+El lado servidor (renderer + endpoint `/api/kiosk/local`) está desplegado en
+`https://clima.xe1e.net`.
+
+Detalle del diseño y las decisiones en
+[`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md); el historial de los problemas del
+panel RGB (tearing, desplazamiento vertical, rayitas) y cómo se resolvieron, en
+[`docs/DISPLAY_ISSUES.md`](docs/DISPLAY_ISSUES.md).
