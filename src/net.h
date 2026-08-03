@@ -4,7 +4,9 @@
  *  - GET del JPEG del display: /api/display.jpg?page=N  -> buffer en PSRAM.
  *  - POST del BME280 local:    /api/kiosk/local          (JSON).
  *
- * La conexión WiFi la maneja wifi_config.h (WiFiManager + NVS).
+ * La conexión WiFi la maneja wifi_config.h (portal propio + NVS). El resultado
+ * de la última petición se publica en g_status (status.h) para el bloque
+ * "Estado" del portal web.
  *
  * Se baja por HTTP (no HTTPS): el handshake TLS en el ESP32 tarda ~1-2s por
  * peticion y hacia lentisimo el cambio de pagina. La imagen es publica y no hay
@@ -19,6 +21,7 @@
 #include <HTTPClient.h>
 #include <esp_heap_caps.h>
 #include "config.h"
+#include "status.h"
 #include "wifi_config.h"
 
 // Buffer en PSRAM para el JPEG descargado (se reserva 1 vez en net_begin).
@@ -43,8 +46,12 @@ inline void net_begin()
 inline bool net_fetch_display(int page, const uint8_t **out, size_t *out_len)
 {
     if (!_img_buf) return false;
-    if (WiFi.status() != WL_CONNECTED && !wifi_config_reconnect()) return false;
+    if (WiFi.status() != WL_CONNECTED && !wifi_config_reconnect()) {
+        g_status.last_http = -1;      // sin WiFi
+        return false;
+    }
 
+    uint32_t t0 = millis();
     WiFiClient client;
 
     HTTPClient http;
@@ -54,14 +61,17 @@ inline bool net_fetch_display(int page, const uint8_t **out, size_t *out_len)
     String url = String(wifi_config_get_api_url()) + "/api/display.jpg?page=" + pageParam;
     if (!http.begin(client, url)) {
         Serial.println("[net] http.begin fallo");
+        g_status.last_http = -2;      // URL invalida
         return false;
     }
     http.setTimeout(15000);
 
     int code = http.GET();
+    g_status.last_http = code;
     if (code != HTTP_CODE_OK) {
         Serial.printf("[net] GET %s -> %d\n", url.c_str(), code);
         http.end();
+        g_status.last_ms = millis() - t0;
         return false;
     }
 
@@ -88,7 +98,10 @@ inline bool net_fetch_display(int page, const uint8_t **out, size_t *out_len)
     }
     http.end();
 
+    g_status.last_ms    = millis() - t0;
+    g_status.last_bytes = total;
     if (total == 0) return false;
+    g_status.last_ok_at = millis();
     *out = _img_buf;
     *out_len = total;
     Serial.printf("[net] display.jpg page=%d: %u bytes\n", page, (unsigned)total);
@@ -116,6 +129,7 @@ inline bool net_post_local(float temperature, float humidity, float pressure)
 
     int code = http.POST((uint8_t *)body, strlen(body));
     http.end();
+    g_status.post_http = code;
     if (code != HTTP_CODE_OK) {
         Serial.printf("[net] POST kiosk/local -> %d\n", code);
         return false;

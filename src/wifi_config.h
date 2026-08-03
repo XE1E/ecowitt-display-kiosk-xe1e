@@ -1,10 +1,20 @@
 /**
- * wifi_config.h - Configuración WiFi con WiFiManager + NVS.
+ * wifi_config.h - Conexion WiFi del kiosco.
  *
- * Flujo:
- * 1. Intenta conectar a redes guardadas en NVS (hasta 3, con fallback)
- * 2. Si falla, abre portal cautivo con escaneo para las 3 redes
- * 3. Las credenciales se guardan en NVS y persisten tras reflash
+ * Flujo de arranque:
+ *   1. Se borran las credenciales que esp_wifi guarda por su cuenta (ver abajo).
+ *   2. Si NO hay ninguna red en nuestro NVS -> portal AP, sin timeout.
+ *   3. Si hay, se intentan en orden 1 -> 2 -> 3. Si ninguna responde -> portal
+ *      AP con timeout (al expirar reinicia y vuelve a intentar la red).
+ *   4. Conectado: queda el servidor de configuracion escuchando en la LAN.
+ *
+ * IMPORTANTE (la "red fantasma"): Arduino-ESP32 tiene WiFi.persistent(true) por
+ * defecto, asi que cada WiFi.begin() graba el SSID/password en el NVS propio de
+ * esp_wifi (namespace nvs.net80211), aparte del nuestro. Al arrancar el STA,
+ * esp_wifi se reconecta SOLO a lo que tenga ahi guardado, ignorando nuestros 3
+ * slots: el display terminaba asociado a una red que ninguna pantalla permitia
+ * editar. Por eso lo primero que hace wifi_config_begin() es borrar ese
+ * namespace y poner WiFi.persistent(false) para que no se vuelva a grabar nada.
  */
 
 #ifndef WIFI_CONFIG_H
@@ -12,275 +22,104 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
-#include <WiFiManager.h>
 #include <Preferences.h>
 
-static const char *NVS_NAMESPACE = "wificfg";
-static const char *KEY_SSID1 = "ssid1";
-static const char *KEY_PASS1 = "pass1";
-static const char *KEY_SSID2 = "ssid2";
-static const char *KEY_PASS2 = "pass2";
-static const char *KEY_SSID3 = "ssid3";
-static const char *KEY_PASS3 = "pass3";
-static const char *KEY_API_URL = "api_url";
-
-#ifndef DEFAULT_API_URL
-#define DEFAULT_API_URL "http://192.168.1.100:8080"
-#endif
-
-#ifndef AP_NAME
-#define AP_NAME "EcowittKiosk"
-#endif
-
-#ifndef PORTAL_TIMEOUT
-#define PORTAL_TIMEOUT 180
-#endif
-
-struct WiFiNetwork {
-    char ssid[33];
-    char pass[65];
-};
-
-static WiFiNetwork _nets[3];
-static char _api_url[128];
-static Preferences _prefs;
-static bool _config_loaded = false;
+#include "settings.h"
+#include "portal.h"
 
 typedef void (*APModeCallback)(const char *ap_name, const char *ip);
 static APModeCallback _ap_callback = nullptr;
 
-inline void wifi_config_set_ap_callback(APModeCallback cb) {
-    _ap_callback = cb;
-}
+inline void wifi_config_set_ap_callback(APModeCallback cb) { _ap_callback = cb; }
 
-static void _load_config()
-{
-    if (_config_loaded) return;
-    _prefs.begin(NVS_NAMESPACE, true);
-    strncpy(_nets[0].ssid, _prefs.getString(KEY_SSID1, "").c_str(), 32);
-    strncpy(_nets[0].pass, _prefs.getString(KEY_PASS1, "").c_str(), 64);
-    strncpy(_nets[1].ssid, _prefs.getString(KEY_SSID2, "").c_str(), 32);
-    strncpy(_nets[1].pass, _prefs.getString(KEY_PASS2, "").c_str(), 64);
-    strncpy(_nets[2].ssid, _prefs.getString(KEY_SSID3, "").c_str(), 32);
-    strncpy(_nets[2].pass, _prefs.getString(KEY_PASS3, "").c_str(), 64);
-    strncpy(_api_url, _prefs.getString(KEY_API_URL, DEFAULT_API_URL).c_str(), 127);
-    _prefs.end();
-    _config_loaded = true;
-}
-
-static void _save_config()
-{
-    _prefs.begin(NVS_NAMESPACE, false);
-    _prefs.putString(KEY_SSID1, _nets[0].ssid);
-    _prefs.putString(KEY_PASS1, _nets[0].pass);
-    _prefs.putString(KEY_SSID2, _nets[1].ssid);
-    _prefs.putString(KEY_PASS2, _nets[1].pass);
-    _prefs.putString(KEY_SSID3, _nets[2].ssid);
-    _prefs.putString(KEY_PASS3, _nets[2].pass);
-    _prefs.putString(KEY_API_URL, _api_url);
-    _prefs.end();
-    Serial.println("[wifi] config guardada");
-}
-
+/** Intenta las 3 redes guardadas en orden. Salta los slots vacios. */
 static bool _try_connect(uint32_t timeout_ms = 15000)
 {
+    settings_load();
     WiFi.mode(WIFI_STA);
+
     for (int i = 0; i < 3; i++) {
-        if (strlen(_nets[i].ssid) == 0) continue;
-        Serial.printf("[wifi] red %d: '%s'\n", i + 1, _nets[i].ssid);
-        WiFi.begin(_nets[i].ssid, _nets[i].pass);
+        if (strlen(g_set.net[i].ssid) == 0) continue;
+        Serial.printf("[wifi] red %d: '%s'\n", i + 1, g_set.net[i].ssid);
+        WiFi.begin(g_set.net[i].ssid, g_set.net[i].pass);
+
         uint32_t start = millis();
-        while (WiFi.status() != WL_CONNECTED && millis() - start < timeout_ms) {
+        while (WiFi.status() != WL_CONNECTED && millis() - start < timeout_ms)
             delay(250);
-        }
+
         if (WiFi.status() == WL_CONNECTED) {
-            Serial.printf("[wifi] OK: %s\n", WiFi.localIP().toString().c_str());
+            Serial.printf("[wifi] OK '%s' -> %s (%d dBm)\n",
+                          WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), WiFi.RSSI());
             return true;
         }
+        Serial.printf("[wifi] red %d fallo\n", i + 1);
         WiFi.disconnect();
     }
     return false;
 }
 
-static bool _should_save = false;
-static void _save_callback() { _should_save = true; }
-
-// HTML/JS custom para el portal: 3 redes con dropdown de escaneo
-static const char CUSTOM_HTML[] PROGMEM = R"rawliteral(
-<style>
-.net-group{background:#f8f8f8;padding:12px;margin:10px 0;border-radius:8px;border:1px solid #ddd}
-.net-group h4{margin:0 0 8px 0;color:#333}
-.net-row{display:flex;gap:8px;margin-bottom:8px}
-.net-row select,.net-row input{flex:1;padding:8px;border:1px solid #ccc;border-radius:4px}
-.net-row select{max-width:60%}
-</style>
-<script>
-function populateSelects(){
-  var nets=[];
-  document.querySelectorAll('#wifi a').forEach(function(a){
-    var s=a.innerText.trim();if(s&&nets.indexOf(s)<0)nets.push(s);
-  });
-  nets.sort();
-  ['sel1','sel2','sel3'].forEach(function(id){
-    var sel=document.getElementById(id);if(!sel)return;
-    sel.innerHTML='<option value="">-- Seleccionar --</option>';
-    nets.forEach(function(n){
-      var o=document.createElement('option');o.value=n;o.text=n;sel.appendChild(o);
-    });
-  });
-}
-function onSelChange(selId,inputId){
-  var sel=document.getElementById(selId);
-  var inp=document.getElementById(inputId);
-  if(sel&&inp&&sel.value)inp.value=sel.value;
-}
-document.addEventListener('DOMContentLoaded',function(){
-  setTimeout(populateSelects,500);
-  setTimeout(populateSelects,2000);
-});
-</script>
-)rawliteral";
-
-static const char PARAM_HTML[] PROGMEM = R"rawliteral(
-<div class="net-group">
-<h4>Red WiFi 1 (Principal)</h4>
-<div class="net-row">
-<select id="sel1" onchange="onSelChange('sel1','ssid1')"><option>Cargando...</option></select>
-<input type="text" id="ssid1" name="ssid1" placeholder="SSID" maxlength="32">
-</div>
-<input type="password" id="pass1" name="pass1" placeholder="Password" maxlength="64" style="width:100%;padding:8px;margin-top:4px">
-</div>
-<div class="net-group">
-<h4>Red WiFi 2 (Respaldo)</h4>
-<div class="net-row">
-<select id="sel2" onchange="onSelChange('sel2','ssid2')"><option>Cargando...</option></select>
-<input type="text" id="ssid2" name="ssid2" placeholder="SSID (opcional)" maxlength="32">
-</div>
-<input type="password" id="pass2" name="pass2" placeholder="Password" maxlength="64" style="width:100%;padding:8px;margin-top:4px">
-</div>
-<div class="net-group">
-<h4>Red WiFi 3 (Respaldo)</h4>
-<div class="net-row">
-<select id="sel3" onchange="onSelChange('sel3','ssid3')"><option>Cargando...</option></select>
-<input type="text" id="ssid3" name="ssid3" placeholder="SSID (opcional)" maxlength="32">
-</div>
-<input type="password" id="pass3" name="pass3" placeholder="Password" maxlength="64" style="width:100%;padding:8px;margin-top:4px">
-</div>
-<div class="net-group">
-<h4>Servidor</h4>
-<input type="text" id="apiurl" name="apiurl" placeholder="URL del servidor" maxlength="127" style="width:100%;padding:8px">
-</div>
-)rawliteral";
-
-inline void wifi_config_begin(bool force_portal = false)
+/** Levanta el portal AP avisando primero a la pantalla. No retorna. */
+static void _go_to_portal(bool wait_forever)
 {
-    _load_config();
-
-    if (!force_portal && _try_connect()) {
-        return;
-    }
-
-    Serial.println("[wifi] portal AP...");
-    if (_ap_callback) {
-        _ap_callback(AP_NAME, "192.168.4.1");
-    }
-
-    WiFiManager wm;
-    wm.setDebugOutput(true);
-    wm.setSaveConfigCallback(_save_callback);
-    wm.setConfigPortalTimeout(PORTAL_TIMEOUT);
-
-    // Ocultar los campos por defecto de WiFiManager
-    wm.setShowStaticFields(false);
-    wm.setShowDnsFields(false);
-    wm.setShowInfoUpdate(false);
-    wm.setShowInfoErase(false);
-
-    // Inyectar CSS/JS custom
-    wm.setCustomHeadElement(CUSTOM_HTML);
-
-    // Parámetros custom con HTML propio
-    WiFiManagerParameter p_custom(PARAM_HTML);
-    wm.addParameter(&p_custom);
-
-    // Parámetros ocultos para capturar los valores
-    WiFiManagerParameter p_ssid1("ssid1", "", _nets[0].ssid, 32);
-    WiFiManagerParameter p_pass1("pass1", "", _nets[0].pass, 64);
-    WiFiManagerParameter p_ssid2("ssid2", "", _nets[1].ssid, 32);
-    WiFiManagerParameter p_pass2("pass2", "", _nets[1].pass, 64);
-    WiFiManagerParameter p_ssid3("ssid3", "", _nets[2].ssid, 32);
-    WiFiManagerParameter p_pass3("pass3", "", _nets[2].pass, 64);
-    WiFiManagerParameter p_url("apiurl", "", _api_url, 127);
-
-    wm.addParameter(&p_ssid1);
-    wm.addParameter(&p_pass1);
-    wm.addParameter(&p_ssid2);
-    wm.addParameter(&p_pass2);
-    wm.addParameter(&p_ssid3);
-    wm.addParameter(&p_pass3);
-    wm.addParameter(&p_url);
-
-    bool connected = wm.startConfigPortal(AP_NAME);
-
-    if (_should_save || connected) {
-        strncpy(_nets[0].ssid, p_ssid1.getValue(), 32);
-        strncpy(_nets[0].pass, p_pass1.getValue(), 64);
-        strncpy(_nets[1].ssid, p_ssid2.getValue(), 32);
-        strncpy(_nets[1].pass, p_pass2.getValue(), 64);
-        strncpy(_nets[2].ssid, p_ssid3.getValue(), 32);
-        strncpy(_nets[2].pass, p_pass3.getValue(), 64);
-        strncpy(_api_url, p_url.getValue(), 127);
-
-        if (strlen(_api_url) == 0) {
-            strncpy(_api_url, DEFAULT_API_URL, 127);
-        }
-
-        // Si el usuario seleccionó una red del escaneo nativo de WM
-        if (strlen(_nets[0].ssid) == 0 && WiFi.SSID().length() > 0) {
-            strncpy(_nets[0].ssid, WiFi.SSID().c_str(), 32);
-            strncpy(_nets[0].pass, WiFi.psk().c_str(), 64);
-        }
-
-        _save_config();
-    }
-
-    if (!connected) {
-        Serial.println("[wifi] sin conexion, reiniciando...");
-        delay(2000);
-        ESP.restart();
-    }
-
-    Serial.printf("[wifi] conectado: %s\n", WiFi.localIP().toString().c_str());
+    if (_ap_callback) _ap_callback(AP_NAME, "192.168.4.1");
+    portal_run_ap(wait_forever);
 }
 
+/**
+ * Conecta o abre el portal. BLOQUEA hasta tener conexion (o reinicia).
+ * Al volver, el servidor de configuracion ya escucha en la IP de la LAN.
+ */
+inline void wifi_config_begin()
+{
+    settings_load();
+
+    // Borrar la configuracion persistente de esp_wifi (ver cabecera del archivo).
+    // Se hace ANTES de inicializar el WiFi, atacando directo su namespace de NVS.
+    //
+    // Los dos caminos "de libro" NO funcionan aqui, ambos comprobados en la placa:
+    //   - WiFi.disconnect(false, true): en el core 3.x el STA todavia no esta
+    //     arrancado en este punto, falla con "STA not started" y el borrado no
+    //     ocurre (devuelve false, sin mas aviso).
+    //   - esp_wifi_restore(): borra, pero deja el driver en modo NULL, asi que
+    //     todos los WiFi.begin() posteriores mueren con "Failed to start STA".
+    Preferences np;
+    if (np.begin("nvs.net80211", false)) {
+        np.clear();
+        np.end();
+        Serial.println("[wifi] credenciales internas de esp_wifi borradas");
+    }
+
+    // De aqui en adelante nada se graba: manda unicamente nuestro NVS.
+    WiFi.persistent(false);
+    WiFi.setAutoReconnect(false);
+    WiFi.mode(WIFI_STA);
+    delay(100);
+
+    if (!settings_has_wifi()) {
+        Serial.println("[wifi] sin redes guardadas -> portal de configuracion");
+        _go_to_portal(true);        // primer arranque: esperar indefinidamente
+    }
+
+    if (!_try_connect()) {
+        Serial.println("[wifi] ninguna red guardada respondio -> portal");
+        _go_to_portal(false);       // reinicia al expirar el timeout
+    }
+
+    WiFi.setAutoReconnect(true);    // reconexion automatica si el AP se cae
+    portal_begin_lan();
+}
+
+/** Reconexion en caliente (la llama net.h antes de cada peticion). */
 inline bool wifi_config_reconnect(uint32_t timeout_ms = 15000)
 {
     if (WiFi.status() == WL_CONNECTED) return true;
-    _load_config();
     return _try_connect(timeout_ms);
 }
 
 inline const char *wifi_config_get_api_url()
 {
-    _load_config();
-    return _api_url;
+    settings_load();
+    return g_set.api_url;
 }
 
-inline void wifi_config_reset()
-{
-    _prefs.begin(NVS_NAMESPACE, false);
-    _prefs.clear();
-    _prefs.end();
-    _config_loaded = false;
-    memset(_nets, 0, sizeof(_nets));
-    memset(_api_url, 0, sizeof(_api_url));
-    Serial.println("[wifi] config borrada");
-}
-
-inline bool wifi_config_has_saved()
-{
-    _load_config();
-    return strlen(_nets[0].ssid) > 0;
-}
-
-#endif
+#endif // WIFI_CONFIG_H

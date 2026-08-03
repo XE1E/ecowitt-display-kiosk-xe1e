@@ -6,46 +6,66 @@
  *
  *   cp my_config.h.template src/my_config.h
  *
- * NOTA: Las credenciales WiFi y la URL del servidor se configuran via el
- * portal cautivo de WiFiManager (no hace falta definirlas aqui). Al primer
- * arranque (o si no conecta), el ESP32 crea un AP "EcowittKiosk" donde puedes
- * configurar hasta 3 redes WiFi y la URL del servidor.
+ * IMPORTANTE: todo lo de aqui son solo los DEFAULTS DEL PRIMER ARRANQUE. La
+ * configuracion real vive en NVS y se edita desde la pagina web del display:
+ *
+ *   - Sin red guardada, el ESP32 abre el AP "EcowittKiosk" (portal cautivo):
+ *     conectas el celular y la pagina se abre sola en http://192.168.4.1/
+ *   - Ya conectado, la misma pagina esta en http://<IP-del-display>/
+ *     Para ver la IP: toque largo (~2.5 s) fuera de la barra de pestañas.
+ *
+ * Ahi se configuran las 3 redes WiFi (con escaneo), la URL del servidor, el
+ * brillo, el intervalo de refresco y los offsets del BME280. Una vez guardado
+ * algo, manda el NVS y sobrevive a los reflasheos: cambiar este archivo ya NO
+ * tiene efecto (usa "Borrar configuracion" en el portal para volver a empezar).
  */
 
 #ifndef MY_CONFIG_H
 #define MY_CONFIG_H
 
 // ============================================================================
-// WiFiManager - Portal de configuracion
+// Portal de configuracion
 // ============================================================================
-// Nombre del AP en modo configuracion (cuando no conecta a ninguna red).
+// Nombre del AP que levanta el display cuando no hay red configurada.
 #define AP_NAME             "EcowittKiosk"
 
-// Timeout del portal en segundos (0 = sin timeout, espera indefinidamente).
+// Timeout del portal, en segundos, cuando SI hay redes guardadas pero ninguna
+// respondio (al expirar, reinicia y reintenta). En el primer arranque (sin
+// ninguna red guardada) el portal espera indefinidamente, sin importar esto.
 #define PORTAL_TIMEOUT      180
 
-// URL por defecto del servidor (se puede cambiar en el portal).
+// ============================================================================
+// Defaults del primer arranque
+// ============================================================================
+// URL base del servidor (sin slash final). El firmware pedira:
+//   GET  {url}/api/display.jpg?page=N
+//   POST {url}/api/kiosk/local
+// USAR HTTP (no HTTPS): el handshake TLS en el ESP32 agrega 1-2 s por peticion.
+// Con HTTP directo por IP y puerto el cambio de pagina es casi instantaneo.
 #define DEFAULT_API_URL     "http://192.168.1.100:8080"
 
-// ============================================================================
-// Refresco del display
-// ============================================================================
-// Cada cuanto refrescar la imagen del display (ms). 60000 = 1 min.
-#define UPDATE_INTERVAL_MS  60000UL
+// Brillo inicial, 1..10 (10 = 100%). Se aplica escalando los pixeles: el
+// backlight de esta placa cuelga del CH422G, que es digital y no tiene PWM.
+#define DEFAULT_BRIGHTNESS  10
+
+// Cada cuantos MINUTOS refrescar la imagen (1..15). Compromiso: mas seguido =
+// datos y reloj mas frescos, pero el refresco se nota mas seguido; cambiar de
+// pagina con el touch SIEMPRE es limpio.
+#define DEFAULT_UPDATE_MIN  3
 
 // ============================================================================
 // BME280 local (este display como sensor de la pagina 2)
 // ============================================================================
-// Poner en 0 para deshabilitar la lectura/envio del BME280.
+// Poner en 0 para que NO se envie al servidor por defecto.
 #define BME280_ENABLED  1
 
-// Intervalo de envio del BME280 al servidor, en segundos (minimo 60).
+// Intervalo de envio del BME280 al servidor, en segundos (60..3600).
 #define REMOTE_STATION_INTERVAL  60
 
 // Offsets de calibracion (se SUMAN a la lectura cruda). Ajustar comparando
 // contra una referencia (termometro / la estacion principal). Ej.: si el BME280
 // marca 29.7 y el real es 25 -> offset = 25 - 29.7 = -4.7. El BME280 suele leer
-// alto por cercania a la electronica; estos offsets lo dejan aproximado.
+// alto por cercania a la electronica. Editables en vivo desde el portal.
 #define BME280_TEMP_OFFSET     0.0f   // grados C
 #define BME280_HUM_OFFSET      0.0f   // %
 #define BME280_PRESS_OFFSET    0.0f   // hPa

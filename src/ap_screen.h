@@ -229,4 +229,56 @@ inline void ap_screen_show(uint16_t *fb, const char *ap_name, const char *ip)
     waveshare_swap_fb(fb);
 }
 
+/**
+ * Pantalla de informacion (toque largo fuera de la barra de pestañas).
+ *
+ * Es la unica forma de averiguar la IP del display sin entrar al router ni
+ * abrir el gabinete, y sin la IP no se puede llegar a la pagina de
+ * configuracion estando ya conectado a la red.
+ */
+inline void info_screen_show(uint16_t *fb, const char *ssid, const char *ip, int rssi)
+{
+    uint16_t bg     = _rgb565(10, 30, 80);
+    uint16_t fg     = _rgb565(255, 255, 255);
+    uint16_t accent = _rgb565(255, 220, 0);
+    uint16_t gray   = _rgb565(120, 140, 160);
+    uint16_t box    = _rgb565(40, 60, 100);
+
+    _fill_screen(fb, bg);
+
+    int y = 55;
+    const char *title = "CONFIGURACION";
+    _draw_text(fb, _center_x(title, 4), y, title, accent, bg, 4);
+
+    y += 85;
+    _draw_text(fb, 80, y, "ABRE EN TU NAVEGADOR:", fg, bg, 3);
+
+    // URL de la pagina de configuracion, destacada.
+    y += 55;
+    char url[64];
+    snprintf(url, sizeof(url), "http://%s/", ip);
+    _fill_rect(fb, 100, y - 8, _text_width(url, 4) + 24, 4 * 7 + 16, box);
+    _draw_text(fb, 112, y, url, accent, box, 4);
+
+    y += 90;
+    char line[80];
+    snprintf(line, sizeof(line), "Red: %s", ssid);
+    _draw_text(fb, 80, y, line, fg, bg, 3);
+
+    y += 45;
+    snprintf(line, sizeof(line), "Senal: %d dBm", rssi);
+    _draw_text(fb, 80, y, line, fg, bg, 3);
+
+    y += 45;
+    snprintf(line, sizeof(line), "Firmware: %s", FW_VERSION);
+    _draw_text(fb, 80, y, line, gray, bg, 3);
+
+    const char *footer = "TOCA LA PANTALLA PARA VOLVER";
+    _draw_text(fb, _center_x(footer, 2), SCREEN_HEIGHT - 45, footer, gray, bg, 2);
+
+    waveshare_fb_flush(fb, SCREEN_WIDTH * SCREEN_HEIGHT * 2);
+    waveshare_wait_vsync(50);
+    waveshare_swap_fb(fb);
+}
+
 #endif // AP_SCREEN_H

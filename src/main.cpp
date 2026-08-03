@@ -31,24 +31,16 @@
 
 #include "config.h"
 #include "my_config.h"
+#include "settings.h"
+#include "status.h"
 #include "rgb_lcd_port.h"
 #include "ap_screen.h"
+#include "bme280_sensor.h"
+#include "portal.h"
 #include "wifi_config.h"
 #include "jpeg_render.h"
 #include "touch_input.h"
 #include "net.h"
-#include "bme280_sensor.h"
-
-// Defaults por si my_config.h (copiado de una plantilla vieja) no los trae.
-#ifndef BME280_TEMP_OFFSET
-#define BME280_TEMP_OFFSET  0.0f
-#endif
-#ifndef BME280_HUM_OFFSET
-#define BME280_HUM_OFFSET   0.0f
-#endif
-#ifndef BME280_PRESS_OFFSET
-#define BME280_PRESS_OFFSET 0.0f
-#endif
 
 // Páginas: constantes en config.h (NUM_TABS, PAGE_CONSOLA, MAX_PAGE_ID). La barra
 // (que dibuja el servidor) muestra NUM_TABS pestañas: las 5 numeradas + "Consola".
@@ -137,10 +129,38 @@ static uint32_t  g_fetched[MAX_PAGE_ID + 1] = { 0 };  // millis del ultimo fetch
 static volatile int g_page  = 1;   // pagina deseada (la cambia el touch)
 static volatile int g_shown = 0;   // pagina mostrada actualmente
 static volatile bool g_blackout = false;  // true si ya se oscureció desde touch
+static volatile bool g_info_request = false;  // toque largo: mostrar pantalla de info
 static SemaphoreHandle_t g_wake;   // despierta al netTask (tap o arranque)
 static SemaphoreHandle_t g_i2c;    // serializa el bus I2C (touch core1 + BME core0)
 
 static LocalSensorData g_local;
+
+// ── Brillo: atenuacion por software ─────────────────────────────────────────
+// El backlight de esta placa cuelga del expansor CH422G (IO2), que es digital:
+// solo enciende/apaga, no hay PWM. Asi que el brillo se aplica escalando los
+// pixeles al copiarlos al framebuffer, con dos LUTs (los canales de RGB565 son
+// de 5 y 6 bits). En el nivel 10 no se toca nada: memcpy directo, costo cero.
+static uint8_t  g_dim_level = 10;          // 1..10 (10 = 100%)
+static uint16_t g_dim5[32], g_dim6[64];
+
+static void build_dim_luts(uint8_t level)
+{
+    for (int i = 0; i < 32; i++) g_dim5[i] = (uint16_t)((i * level + 5) / 10);
+    for (int i = 0; i < 64; i++) g_dim6[i] = (uint16_t)((i * level + 5) / 10);
+    g_dim_level = level;
+}
+
+// Copia `px` pixeles aplicando el brillo actual.
+static inline void dim_copy(uint16_t *dst, const uint16_t *src, size_t px)
+{
+    if (g_dim_level >= 10) { memcpy(dst, src, px * 2); return; }
+    for (size_t i = 0; i < px; i++) {
+        uint16_t p = src[i];
+        dst[i] = (uint16_t)((g_dim5[(p >> 11) & 0x1F] << 11) |
+                            (g_dim6[(p >>  5) & 0x3F] <<  5) |
+                             g_dim5[ p        & 0x1F]);
+    }
+}
 
 // ── Baja + decodifica la pagina y la copia al framebuffer indicado ──────────
 // La copia va en trozos con flush+micro-pausa para no saturar el bus PSRAM (si
@@ -153,15 +173,13 @@ static bool load_into(int fbIdx, int page)
     if (!jpeg_decode_to_fb(jpg, jpg_len, g_scratch)) return false;
 
     const int CHUNK_ROWS = 30;
-    const size_t row_bytes = (size_t)SCREEN_WIDTH * 2;
-    uint8_t *dst = (uint8_t *)g_fb[fbIdx];
-    uint8_t *src = (uint8_t *)g_scratch;
+    const size_t row_px = (size_t)SCREEN_WIDTH;
 
     for (int y = 0; y < SCREEN_HEIGHT; y += CHUNK_ROWS) {
         int rows = min(CHUNK_ROWS, SCREEN_HEIGHT - y);
-        size_t off = (size_t)y * row_bytes, n = (size_t)rows * row_bytes;
-        memcpy(dst + off, src + off, n);
-        waveshare_fb_flush(dst + off, n);
+        size_t off_px = (size_t)y * row_px, n_px = (size_t)rows * row_px;
+        dim_copy(g_fb[fbIdx] + off_px, g_scratch + off_px, n_px);
+        waveshare_fb_flush(g_fb[fbIdx] + off_px, n_px * 2);
         delayMicroseconds(200);
     }
     g_fbPage[fbIdx]  = page;
@@ -246,6 +264,18 @@ static void show(int page)
     }
 }
 
+// ── Cambio de ajustes de pantalla desde el portal web ───────────────────────
+// Brillo o intervalo nuevos (y el boton "forzar refresco"): las paginas en
+// cache se pintaron con el brillo anterior, asi que se invalidan y se recargan.
+static void on_display_settings_changed()
+{
+    build_dim_luts(g_set.brightness);
+    for (int i = 0; i < 2; i++) g_fbPage[i] = 0;
+    for (int i = 0; i <= MAX_PAGE_ID; i++) g_fetched[i] = 0;
+    g_shown = 0;                       // fuerza a netTask a recargar g_page
+    xSemaphoreGive(g_wake);
+}
+
 // ── Task de red (core 0) ────────────────────────────────────────────────────
 static void netTask(void *)
 {
@@ -257,6 +287,22 @@ static void netTask(void *)
     for (;;) {
         xSemaphoreTake(g_wake, pdMS_TO_TICKS(500));
 
+        // Toque largo: pantalla de info con la IP y la URL del portal. Se dibuja
+        // AQUI (core 0) y no en el loop del touch, para que solo una tarea toque
+        // los framebuffers. Se queda 15 s o hasta que se toque una pestaña.
+        if (g_info_request) {
+            g_info_request = false;
+            int back = g_shownFb ^ 1;
+            info_screen_show(g_fb[back], WiFi.SSID().c_str(),
+                             WiFi.localIP().toString().c_str(), WiFi.RSSI());
+            g_fbPage[back] = 0;          // ese FB ya no tiene una pagina valida
+            g_shownFb = back;
+            uint32_t t0 = millis();
+            while (millis() - t0 < 15000 && g_page == g_shown) delay(50);
+            g_shown = 0;                 // forzar recarga de la pagina al salir
+            continue;
+        }
+
         int page = g_page;
 
         // Cambio de pagina (tap en una pestaña).
@@ -264,9 +310,10 @@ static void netTask(void *)
 
         // Refresco de datos de la pagina mostrada, si esta vieja: escribe al FB
         // de atras y hace swap (true double buffering -> sin tearing ni rayitas).
+        // El intervalo es configurable en el portal (1..15 min).
         uint32_t now = millis();
         if (g_shown >= 1 &&
-            (g_fetched[g_shown] == 0 || now - g_fetched[g_shown] >= UPDATE_INTERVAL_MS)) {
+            (g_fetched[g_shown] == 0 || now - g_fetched[g_shown] >= settings_update_interval_ms())) {
             int back = g_shownFb ^ 1;
             if (load_into(back, g_shown)) {
                 waveshare_wait_vsync(50);
@@ -274,12 +321,13 @@ static void netTask(void *)
                 g_shownFb = back;
             }
         }
+        g_status.page = g_shown;
 
-        // BME280: leer y enviar cada REMOTE_STATION_INTERVAL segundos. La LECTURA
-        // toma el mutex de I2C (el bus lo comparte con el touch del core 1).
-#if BME280_ENABLED
-        if (isBME280Available() &&
-            (last_bme == 0 || now - last_bme >= (uint32_t)REMOTE_STATION_INTERVAL * 1000UL)) {
+        // BME280: leer y enviar cada g_set.bme_interval segundos. La LECTURA toma
+        // el mutex de I2C (el bus lo comparte con el touch del core 1). Tanto el
+        // habilitado como el intervalo se cambian en caliente desde el portal.
+        if (g_set.bme_enabled && isBME280Available() &&
+            (last_bme == 0 || now - last_bme >= (uint32_t)g_set.bme_interval * 1000UL)) {
             bool ok;
             xSemaphoreTake(g_i2c, portMAX_DELAY);
             ok = readBME280(g_local) && g_local.valid;
@@ -287,7 +335,6 @@ static void netTask(void *)
             if (ok) net_post_local(g_local.temperature, g_local.humidity, g_local.pressure);
             last_bme = now;
         }
-#endif
     }
 }
 
@@ -316,32 +363,46 @@ void setup()
         if (g_fb[i]) memset(g_fb[i], 0, FB_BYTES);
     g_shownFb = 0;
 
+    // Ajustes guardados (NVS) + LUTs de brillo, antes de pintar cualquier página.
+    settings_load();
+    build_dim_luts(g_set.brightness);
+
     // Registrar callback para mostrar pantalla cuando entre en modo AP.
     wifi_config_set_ap_callback(on_ap_mode);
 
-    // WiFi: intenta conectar a redes guardadas, o abre portal de configuración.
-    // Bloquea hasta tener conexión. Si entra en modo AP, llama al callback.
+    // WiFi: intenta conectar a las redes guardadas, o abre el portal de
+    // configuración (modo AP). Bloquea hasta tener conexión; si entra en modo AP
+    // llama al callback para pintar las instrucciones en la pantalla. Al volver,
+    // el portal ya escucha en la IP de la LAN.
     wifi_config_begin();
 
     // Buffer de decodificacion (offscreen) en PSRAM.
     g_scratch = (uint16_t *)heap_caps_malloc(FB_BYTES, MALLOC_CAP_SPIRAM);
     if (!g_scratch) Serial.println("[boot] ERROR: sin PSRAM para el buffer de decode");
 
-    // Touch + BME280.
+    // Touch + BME280. El sensor se inicializa siempre (asi el portal puede
+    // reportar si responde); que se ENVIE al servidor depende de g_set.bme_enabled.
     touch_input_begin();
-#if BME280_ENABLED
     initBME280(BME280_I2C_ADDR);
-    setBME280TemperatureOffset(BME280_TEMP_OFFSET);
-    setBME280HumidityOffset(BME280_HUM_OFFSET);
-    setBME280PressureOffset(BME280_PRESS_OFFSET);
-#endif
+    setBME280TemperatureOffset(g_set.off_temp);
+    setBME280HumidityOffset(g_set.off_hum);
+    setBME280PressureOffset(g_set.off_press);
 
     // Mutex de I2C + task de red en el core 0; el loop() (touch) corre en el core 1.
     g_i2c  = xSemaphoreCreateMutex();
     g_wake = xSemaphoreCreateBinary();
     xTaskCreatePinnedToCore(netTask, "net", 8192, nullptr, 1, nullptr, 0);
+
+    // El portal puede cambiar brillo/intervalo en caliente. Se registra DESPUES
+    // de crear g_wake porque el callback lo usa para despertar a netTask.
+    portal_set_display_callback(on_display_settings_changed);
+
     xSemaphoreGive(g_wake);   // primer render inmediato
 }
+
+// Toque largo: millis del inicio de un toque fuera de la barra (0 = ninguno).
+static uint32_t g_press_start = 0;
+static const uint32_t LONG_PRESS_MS = 2500;
 
 void loop()
 {
@@ -368,7 +429,10 @@ void loop()
             new_page = (idx == NUM_TABS - 1) ? PAGE_CONSOLA : (idx + 1);
             Serial.printf("[touch] tab x=%u y=%u -> pagina %d\n", tx, ty, new_page);
         } else {
+            // Fuera de la barra: no cambia de página, pero si se sostiene se
+            // convierte en toque largo (ver abajo).
             Serial.printf("[touch] x=%u y=%u (fuera de la barra)\n", tx, ty);
+            g_press_start = millis();
         }
 
         // Si hay cambio de página, oscurecer inmediatamente si no está en caché
@@ -380,5 +444,22 @@ void loop()
             xSemaphoreGive(g_wake);
         }
     }
+
+    // Toque largo (>= 2.5 s) fuera de la barra: pantalla con la IP y la URL del
+    // portal. Sin esto no hay forma de averiguar la IP del display (y por tanto
+    // de llegar a la configuración) sin entrar al router.
+    if (g_press_start) {
+        if (!touch_input_down()) {
+            g_press_start = 0;                      // se soltó antes: era un tap
+        } else if (millis() - g_press_start >= LONG_PRESS_MS) {
+            g_press_start = 0;
+            Serial.println("[touch] toque largo -> pantalla de info");
+            g_info_request = true;
+            xSemaphoreGive(g_wake);
+        }
+    }
+
+    // Atender la página de configuración (puerto 80 en la IP de la LAN).
+    portal_handle();
     delay(5);
 }

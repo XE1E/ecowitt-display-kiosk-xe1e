@@ -44,9 +44,9 @@ I2C compartido en **GPIO 8 (SDA) / 9 (SCL)**. Pines del panel RGB en
 ## Compilar y flashear (PlatformIO)
 
 ```bash
-# 1. Configuración (opcional, los defaults funcionan)
+# 1. Configuración (opcional: solo defaults del primer arranque; el WiFi y la
+#    URL se configuran después desde la página web del display)
 cp my_config.h.template src/my_config.h
-#    edita src/my_config.h si quieres cambiar el nombre del AP, timeouts, etc.
 
 # 2. Compilar y subir
 pio run -t upload
@@ -58,27 +58,44 @@ pio device monitor
 Ajusta la altitud de tu sitio en `src/config.h` (`BME280_ALTITUDE`, por defecto
 2240 m para CDMX) para que la presión se corrija a nivel del mar.
 
-## Configuración WiFi (WiFiManager)
+## Configuración (página web del display)
 
-El firmware usa **WiFiManager** con portal cautivo. Al primer arranque (o si no
-puede conectar a ninguna red conocida):
+Todo se configura desde una página web que sirve el propio ESP32
+([`src/portal.h`](src/portal.h)) — no hace falta app ni recompilar. Hay dos
+formas de llegar a ella:
 
-1. El ESP32 crea un AP llamado **"EcowittKiosk"** (sin contraseña)
-2. Conéctate desde tu celular/laptop a ese AP
-3. Se abre automáticamente el portal de configuración (o ve a `192.168.4.1`)
-4. Configura:
-   - **Hasta 3 redes WiFi** (con fallback automático)
-   - **URL del servidor** (ej: `http://192.168.1.100:8080`)
-5. Guarda y el display se reinicia conectado
+| Situación | Cómo entrar |
+|---|---|
+| Sin red guardada, o ninguna responde | El display abre el AP **"EcowittKiosk"** (sin contraseña). Al conectarte, el **portal cautivo se abre solo**; si no, ve a `http://192.168.4.1/` |
+| Ya conectado a tu red | `http://<IP-del-display>/` desde cualquier navegador de la LAN |
 
-Las credenciales se guardan en **NVS** (memoria no volátil) y persisten tras
-reinicios y reflasheos.
+Para ver la IP sin entrar al router: **toque largo (~2.5 s) fuera de la barra de
+pestañas** — muestra IP, SSID, señal y versión durante 15 s.
 
-### Forzar reconfiguración
+Qué se puede configurar:
 
-Si necesitas cambiar la configuración WiFi:
-- Borra la partición NVS con `pio run -t erase` antes de flashear, o
-- Modifica el código para llamar `wifi_config_reset()` y reflashea
+- **Estado / diagnóstico** — SSID, RSSI, IP, MAC, uptime, firmware, PSRAM/heap,
+  código y latencia del último GET, estado del BME280
+- **3 redes WiFi** con **escaneo** (toca una red de la lista y se llena el slot).
+  Se intentan en orden 1 → 2 → 3
+- **URL del servidor**, con botón **Probar conexión** (código HTTP y ms) antes de
+  guardar
+- **Brillo** (1–10) e **intervalo de refresco** (1–15 min) — se aplican sin
+  reiniciar
+- **BME280**: habilitado, intervalo de envío y **offsets de calibración**
+  (temp/hum/presión) — también en vivo, así se calibra sin reflashear
+- **Mantenimiento**: forzar refresco, reiniciar y borrar configuración
+
+Lo que cambia WiFi o URL reinicia el display; el resto se aplica al instante.
+
+Todo se guarda en **NVS** y persiste tras reinicios y reflasheos: una vez
+guardado algo, `src/my_config.h` ya no manda (solo aporta los defaults del primer
+arranque). Para volver a cero: **Borrar configuración** en el portal, o
+`pio run -t erase` antes de flashear.
+
+> El primer arranque siempre entra en modo AP y espera indefinidamente: sin red
+> guardada no hay a dónde conectarse. Si hay redes guardadas pero ninguna
+> responde, el portal expira a los `PORTAL_TIMEOUT` segundos y reintenta.
 
 ## Estructura
 
@@ -86,8 +103,12 @@ Si necesitas cambiar la configuración WiFi:
 src/
   main.cpp          Orquestación (fetch → decode → swap; touch; BME280)
   config.h          Pines de hardware + struct del sensor
-  my_config.h       Configuración (NO versionado; copiar del template)
-  wifi_config.h     WiFiManager + NVS (portal cautivo, 3 redes)
+  my_config.h       Defaults del primer arranque (NO versionado; copiar del template)
+  settings.h        Ajustes persistentes en NVS (redes, URL, brillo, sensor)
+  portal.h          Página web de configuración + portal cautivo (AP y LAN)
+  status.h          Estado de ejecución para el bloque de diagnóstico
+  wifi_config.h     Conexión WiFi (3 redes con fallback) y salto al portal
+  ap_screen.h       Pantallas locales: modo AP e info (IP + URL del portal)
   rgb_lcd_port.*    Driver del panel RGB (esp_lcd nativo, sin LVGL)
   jpeg_render.h     JPEGDEC → framebuffer RGB565
   touch_input.h     GT911 sobre Wire + detección de tap

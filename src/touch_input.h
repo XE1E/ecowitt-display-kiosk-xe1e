@@ -126,4 +126,14 @@ inline bool touch_input_tapped(uint16_t *tx = nullptr, uint16_t *ty = nullptr)
     return tapped;
 }
 
+/**
+ * ¿Sigue el dedo sobre la pantalla? Usa el mismo criterio que touch_input_tapped
+ * (ultimo punto visto hace menos de TOUCH_RELEASE_MS), asi que solo es valido si
+ * se esta sondeando el touch con regularidad. Sirve para detectar toque largo.
+ */
+inline bool touch_input_down()
+{
+    return (millis() - _touch_last_seen) <= TOUCH_RELEASE_MS;
+}
+
 #endif // TOUCH_INPUT_H
