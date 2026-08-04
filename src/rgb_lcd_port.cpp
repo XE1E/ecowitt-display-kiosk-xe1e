@@ -106,12 +106,18 @@ esp_lcd_panel_handle_t waveshare_esp32_s3_rgb_lcd_init()
     return panel_handle;
 }
 
-// Espera hasta el proximo fin de frame (o timeout). Usar antes/despues del swap
-// para alinear con el refresco del panel.
+// Espera hasta el PROXIMO fin de frame (o timeout). Usar justo antes del swap
+// para que la conmutacion caiga en el limite de frame y no a media pantalla.
+//
+// El semaforo es binario y el ISR lo libera en CADA fin de frame, asi que si nadie
+// lo consumio queda en 1: sin drenarlo primero, esta funcion volvia al instante
+// con un evento de hace hasta un frame entero (~33 ms), el swap caia a mitad del
+// barrido y se veia el "brinco". Con el drenaje se espera un evento fresco.
 void waveshare_wait_vsync(uint32_t timeout_ms)
 {
     if (vsync_sem) {
-        xSemaphoreTake(vsync_sem, pdMS_TO_TICKS(timeout_ms));
+        xSemaphoreTake(vsync_sem, 0);                          // descarta el rancio
+        xSemaphoreTake(vsync_sem, pdMS_TO_TICKS(timeout_ms));  // espera el proximo
     }
 }
 

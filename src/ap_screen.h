@@ -278,7 +278,7 @@ inline void info_screen_show(uint16_t *fb, const char *ssid, const char *ip, int
     _draw_text(fb, _center_x(footer, 2), SCREEN_HEIGHT - 45, footer, gray, bg, 2);
 
     waveshare_fb_flush(fb, SCREEN_WIDTH * SCREEN_HEIGHT * 2);
-    waveshare_wait_vsync(50);
+    waveshare_wait_vsync(WAVESHARE_VSYNC_WAIT_MS);
     waveshare_swap_fb(fb);
 }
 

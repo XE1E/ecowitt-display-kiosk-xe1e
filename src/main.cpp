@@ -230,7 +230,7 @@ static void spinner_present()
     draw_spinner(g_fb[back], g_spinner_frame);
     waveshare_fb_flush(g_fb[back], FB_BYTES);
     g_fbPage[back] = FB_SPINNER;
-    waveshare_wait_vsync(50);
+    waveshare_wait_vsync(WAVESHARE_VSYNC_WAIT_MS);
     waveshare_swap_fb(g_fb[back]);
     g_shownFb = back;
 }
@@ -262,8 +262,12 @@ static void show(int page)
     if (page < 1 || page > MAX_PAGE_ID) return;
 
     // ¿Ya esta cargada en algun framebuffer? -> swap PURO (transicion limpia).
+    // Tambien aqui hay que esperar el limite de frame: es un swap como cualquier
+    // otro y, sin la espera, conmutaba en un punto arbitrario del barrido -> se
+    // veia el "brinco" justo en la transicion mas rapida, la que no escribe nada.
     for (int i = 0; i < 2; i++) {
         if (g_fbPage[i] == page) {
+            waveshare_wait_vsync(WAVESHARE_VSYNC_WAIT_MS);
             waveshare_swap_fb(g_fb[i]);
             g_shownFb = i;
             g_shown = page;
@@ -279,7 +283,7 @@ static void show(int page)
     // Cargar la página en el FB de atrás y mostrar.
     int back = g_shownFb ^ 1;
     if (load_into(back, page)) {
-        waveshare_wait_vsync(50);
+        waveshare_wait_vsync(WAVESHARE_VSYNC_WAIT_MS);
         waveshare_swap_fb(g_fb[back]);
         g_shownFb = back;
         g_shown = page;
@@ -358,7 +362,7 @@ static void netTask(void *)
             (g_fetched[g_shown] == 0 || now - g_fetched[g_shown] >= settings_update_interval_ms())) {
             int back = g_shownFb ^ 1;
             if (load_into(back, g_shown)) {
-                waveshare_wait_vsync(50);
+                waveshare_wait_vsync(WAVESHARE_VSYNC_WAIT_MS);
                 waveshare_swap_fb(g_fb[back]);
                 g_shownFb = back;
             }

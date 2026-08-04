@@ -56,6 +56,41 @@ no hay que esperar a que netTask despierte.
 
 ---
 
+## Problema: Brinco al conmutar de framebuffer (swap a media pantalla)
+
+### Síntomas
+- Al cambiar de pestaña se ve un "brincoteo": la pantalla salta un instante antes
+  de asentarse en la página nueva
+- Se notaba **sobre todo al volver a una página cacheada**, que es la transición
+  más rápida (un swap puro, sin escribir nada)
+
+### Causa
+Dos cosas, ambas hacían que el swap cayera **en medio del barrido** en vez de en
+el límite de frame:
+
+1. `show()` hacía el swap puro de una página cacheada **sin esperar el vsync**.
+   Todos los demás caminos (spinner, carga, refresco) sí esperaban; el rápido, no.
+   Por eso el brinco sobrevivía justo en la transición que parecía más limpia (y
+   por eso la nota de arriba de "entre las 2 últimas páginas no hay problema"
+   estaba equivocada).
+2. `waveshare_wait_vsync()` podía volver **al instante** con un evento rancio: el
+   semáforo es binario y el ISR de fin de frame lo libera en *cada* frame, así que
+   si nadie lo consumió quedaba en 1 y la "espera" devolvía un evento de hace
+   hasta un frame entero (~31 ms).
+
+### Solución
+- `waveshare_wait_vsync()` **drena** el semáforo (`take` con timeout 0) antes de
+  esperar, así siempre espera un fin de frame fresco.
+- El swap puro de `show()` también espera el límite de frame.
+- El timeout de espera es `WAVESHARE_VSYNC_WAIT_MS` (100 ms = 3 frames de margen a
+  los ~32.7 fps de este panel): nunca expira antes de tener el evento, y si el
+  callback dejara de llegar el render no se cuelga.
+
+El costo es de hasta un frame (~31 ms) de retraso por swap, imperceptible, y es
+exactamente lo que el diseño pretendía desde el principio.
+
+---
+
 ## Configuración del Bounce Buffer
 
 ### Parámetro
@@ -99,3 +134,5 @@ El driver soporta hasta 3 framebuffers pero 2 es suficiente.
 | `platformio.ini` | `CONFIG_LCD_RGB_RESTART_IN_VSYNC=n` |
 | `src/rgb_lcd_port.h` | Bounce buffer de 10 a 3 líneas |
 | `src/main.cpp` | Oscurecimiento instantáneo desde touch |
+| `src/rgb_lcd_port.cpp` | `waveshare_wait_vsync()` drena el semáforo antes de esperar |
+| `src/main.cpp` | El swap puro de página cacheada también espera el vsync |

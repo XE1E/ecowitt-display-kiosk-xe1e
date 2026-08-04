@@ -171,7 +171,7 @@ stubs/              Header vacío de esp-dsp (JPEGDEC con -DNO_SIMD)
 
 ## Estado
 
-Firmware **v1.2.1**, funcionando en hardware. Validado en la placa: decodificado
+Firmware **v1.2.2**, funcionando en hardware. Validado en la placa: decodificado
 y pintado del JPEG, swap de framebuffer sin tearing, reset y lectura del GT911,
 navegación por pestañas, BME280, portal de configuración (modo AP y LAN),
 escaneo de redes, brillo, offsets en vivo y actualización por OTA.

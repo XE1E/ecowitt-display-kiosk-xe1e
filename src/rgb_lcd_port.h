@@ -123,4 +123,10 @@ void waveshare_swap_fb(void *fb);
  */
 void waveshare_wait_vsync(uint32_t timeout_ms);
 
+// Timeout a usar con waveshare_wait_vsync antes de un swap. Este panel corre a
+// ~32.7 fps (30 MHz / (1386*661) px por frame) = ~31 ms por frame, asi que 100 ms
+// son 3 frames de margen: la espera nunca expira antes de tener el evento, y si
+// el callback dejara de llegar tampoco se cuelga el render.
+#define WAVESHARE_VSYNC_WAIT_MS 100
+
 #endif // _RGB_LCD_H_
