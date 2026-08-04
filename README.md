@@ -114,7 +114,9 @@ pestañas** — muestra IP, SSID, señal y versión durante 15 s.
 Qué se puede configurar:
 
 - **Estado / diagnóstico** — SSID, RSSI, IP, MAC, uptime, firmware, PSRAM/heap,
-  código y latencia del último GET, estado del BME280
+  código y latencia del último GET, velocidad de bajada, **desglose del cambio de
+  página** (red + decode + pintado) y estado del BME280. Ver
+  [`docs/RENDIMIENTO.md`](docs/RENDIMIENTO.md)
 - **3 redes WiFi** con **escaneo** (toca una red de la lista y se llena el slot).
   Se intentan en orden 1 → 2 → 3
 - **URL del servidor**, con botón **Probar conexión** (código HTTP y ms) antes de
@@ -160,6 +162,7 @@ src/
 docs/
   ARQUITECTURA.md      Detalle del diseño y decisiones
   DISPLAY_ISSUES.md    Problemas del panel RGB (tearing, rayitas) y su solución
+  RENDIMIENTO.md       Cuánto tarda un cambio de página y dónde se va el tiempo
   PLAN-CONSOLA-XE1E.md Plan de la página "consola"
 stubs/              Header vacío de esp-dsp (JPEGDEC con -DNO_SIMD)
 3d-prints/          Gabinete imprimible (STL + fotos)
@@ -171,7 +174,7 @@ stubs/              Header vacío de esp-dsp (JPEGDEC con -DNO_SIMD)
 
 ## Estado
 
-Firmware **v1.2.2**, funcionando en hardware. Validado en la placa: decodificado
+Firmware **v1.3.0**, funcionando en hardware. Validado en la placa: decodificado
 y pintado del JPEG, swap de framebuffer sin tearing, reset y lectura del GT911,
 navegación por pestañas, BME280, portal de configuración (modo AP y LAN),
 escaneo de redes, brillo, offsets en vivo y actualización por OTA.
