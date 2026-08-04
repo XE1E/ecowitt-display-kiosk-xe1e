@@ -194,11 +194,14 @@ static bool load_into(int fbIdx, int page)
 {
     const uint8_t *jpg = nullptr;
     size_t jpg_len = 0;
+    uint32_t t0 = millis();
     if (!net_fetch_display(page, &jpg, &jpg_len)) return false;
 
+    uint32_t t_dec = millis();
     g_fbPage[fbIdx] = FB_INVALID;
     if (!jpeg_decode_to_fb(jpg, jpg_len, g_fb[fbIdx], dim_copy)) return false;
 
+    uint32_t t_paint = millis();
     const int CHUNK_ROWS = 30;
     for (int y = 0; y < SCREEN_HEIGHT; y += CHUNK_ROWS) {
         int rows = min(CHUNK_ROWS, SCREEN_HEIGHT - y);
@@ -206,6 +209,14 @@ static bool load_into(int fbIdx, int page)
         waveshare_fb_flush(g_fb[fbIdx] + off_px, (size_t)rows * SCREEN_WIDTH * 2);
         delayMicroseconds(200);
     }
+    uint32_t t_end = millis();
+
+    // Desglose de la carga (lo muestra el portal): asi se ve si el tiempo que dura
+    // el spinner se va en la red, en el decode o en el flush al panel.
+    g_status.decode_ms = t_paint - t_dec;
+    g_status.paint_ms  = t_end - t_paint;
+    g_status.load_ms   = t_end - t0;
+
     g_fbPage[fbIdx]  = page;
     g_fetched[page]  = millis();
     return true;

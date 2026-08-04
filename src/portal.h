@@ -223,6 +223,8 @@ function loadStatus(){
       ['IP',s.ip],['MAC',s.mac],['Encendido hace',s.up],['Firmware',s.fw],
       ['Pagina mostrada',s.page?String(s.page):'--'],
       ['Ultimo GET',http+(s.ms?'  '+s.ms+' ms':'')+(s.bytes?'  '+s.bytes+' B':'')],
+      ['Velocidad de bajada',(s.ms&&s.bytes)?(s.bytes/s.ms).toFixed(0)+' KB/s':'--'],
+      ['Cambio de pagina',s.load?(s.load+' ms  =  red '+s.ms+' + decode '+s.dec+' + pintado '+s.pnt):'--'],
       ['POST BME280',s.post===0?'--':String(s.post)],
       ['BME280',s.bme?'presente':'no responde'],
       ['PSRAM libre',(s.psram/1024).toFixed(0)+' KB'],
@@ -359,6 +361,9 @@ static void _h_status()
     j += ",\"http\":";  j += String(g_status.last_http);
     j += ",\"ms\":";    j += String(g_status.last_ms);
     j += ",\"bytes\":"; j += String(g_status.last_bytes);
+    j += ",\"dec\":";   j += String(g_status.decode_ms);
+    j += ",\"pnt\":";   j += String(g_status.paint_ms);
+    j += ",\"load\":";  j += String(g_status.load_ms);
     j += ",\"post\":";  j += String(g_status.post_http);
     j += ",\"bme\":";   j += isBME280Available() ? "true" : "false";
     j += ",\"psram\":"; j += String(ESP.getFreePsram());
