@@ -17,7 +17,7 @@
 #include <Arduino.h>
 
 // Version del firmware (se muestra en el bloque "Estado" del portal web).
-#define FW_VERSION "1.3.0"
+#define FW_VERSION "1.3.1"
 
 // ============================================================================
 // I2C (bus compartido: CH422G + GT911 + BME280)
@@ -53,6 +53,11 @@
 #define NUM_TABS      6     // pestañas visibles en la barra (5 + Consola)
 #define PAGE_CONSOLA  6     // id interno de la consola (full-screen)
 #define MAX_PAGE_ID   6     // ids de página válidos: 1..MAX_PAGE_ID
+
+// Pagina con la que arranca el display. La consola es la cara principal de la
+// estacion, asi que el arranque va directo a ella; sigue siendo ademas la 6a
+// pestaña de la barra (esto NO cambia el orden ni el numero de pestañas).
+#define PAGE_HOME     PAGE_CONSOLA
 
 // ============================================================================
 // Estructura del sensor local (la usa bme280_sensor.h)

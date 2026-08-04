@@ -61,7 +61,9 @@ a 6 en `main.cpp`. La 6ª es especial (va a `?page=consola`, no a `page=6`).
 
 ## Fase futura — la visión (PENDIENTE, es lo que queda)
 
-- La **consola pasa a ser la principal/home** (el display arranca en ella).
+- ✅ **HECHO (2026-08-04):** la **consola es la principal/home**, el display arranca
+  en ella (`PAGE_HOME` en `src/config.h`). Conserva su lugar como 6ª pestaña: el
+  arranque no cambió el orden ni el número de pestañas de la barra.
 - **Zonas de toque por bloque** de la rejilla 3×5 → pantalla de detalle. Mapeo
   **tentativo** (se ajustará; las zonas serán distintas a la barra de pestañas):
   - 🧭 **WIND** (compás) → rosa de vientos

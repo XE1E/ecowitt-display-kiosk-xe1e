@@ -43,6 +43,10 @@ toque.
 | 📈 48 h     | 5           | `/kiosko?page=5`        | Resumen multivariable: temperatura, presión, lluvia, viento y humedad de las últimas 48 h |
 | 🖥️ Consola  | `consola`   | `/kiosko?page=consola`  | Réplica de la consola física Ecowitt, **pantalla completa sin barra** |
 
+El display **arranca en la consola** (`PAGE_HOME` en [`src/config.h`](src/config.h)):
+es la cara principal de la estación. Eso no cambia su lugar en la barra, sigue
+siendo la 6ª pestaña.
+
 La consola es especial: al no tener barra de pestañas, un toque en **cualquier
 parte** regresa a la página 1. Su URL usa `?page=consola`, no un número.
 
@@ -174,7 +178,7 @@ stubs/              Header vacío de esp-dsp (JPEGDEC con -DNO_SIMD)
 
 ## Estado
 
-Firmware **v1.3.0**, funcionando en hardware. Validado en la placa: decodificado
+Firmware **v1.3.1**, funcionando en hardware. Validado en la placa: decodificado
 y pintado del JPEG, swap de framebuffer sin tearing, reset y lectura del GT911,
 navegación por pestañas, BME280, portal de configuración (modo AP y LAN),
 escaneo de redes, brillo, offsets en vivo y actualización por OTA.

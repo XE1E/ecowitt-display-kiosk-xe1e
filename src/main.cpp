@@ -47,6 +47,8 @@
 // (que dibuja el servidor) muestra NUM_TABS pestañas: las 5 numeradas + "Consola".
 // La consola (PAGE_CONSOLA) es full-screen SIN barra; estando en ella, un toque en
 // cualquier parte regresa a la página 1.
+// El display ARRANCA en PAGE_HOME (= la consola): es la cara principal de la
+// estacion. Sigue siendo la 6a pestaña de la barra, el arranque no altera el orden.
 
 // Barra de pestañas: franja inferior de la pantalla. Un toque en esta franja
 // selecciona la pestaña segun la X (repartidas por igual). El servidor dibuja
@@ -140,7 +142,7 @@ static volatile int g_fbPage[2] = { FB_INVALID, FB_INVALID };  // que tiene cada
 static volatile int g_shownFb   = 0;                  // indice del FB mostrado
 static uint32_t  g_fetched[MAX_PAGE_ID + 1] = { 0 };  // millis del ultimo fetch por pagina (1..MAX_PAGE_ID)
 
-static volatile int g_page  = 1;   // pagina deseada (la cambia el touch)
+static volatile int g_page  = PAGE_HOME;  // pagina deseada (la cambia el touch)
 static volatile int g_shown = 0;   // pagina mostrada actualmente
 static volatile bool g_info_request = false;  // toque largo: mostrar pantalla de info
 static volatile bool g_info_showing = false;  // pantalla de info en pantalla (la cierra un toque)
