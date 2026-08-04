@@ -17,7 +17,7 @@
 #include <Arduino.h>
 
 // Version del firmware (se muestra en el bloque "Estado" del portal web).
-#define FW_VERSION "1.2.3"
+#define FW_VERSION "1.2.4"
 
 // ============================================================================
 // I2C (bus compartido: CH422G + GT911 + BME280)

@@ -12,4 +12,7 @@
  * por su ruta en C puro (mas que suficiente: refrescamos ~1 vez por minuto).
  */
 #pragma once
-#define dsps_fft2r_sc16_aes3_enabled 0
+// 1 = el cuerpo del .S SI se compila, para poder usar el SIMD del S3 en el decode
+// del JPEG (el paso mas caro del cambio de pagina: ~243 ms medidos en la placa).
+// Ver platformio.ini: va de la mano con NO usar -DNO_SIMD.
+#define dsps_fft2r_sc16_aes3_enabled 1
