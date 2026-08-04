@@ -11,8 +11,8 @@ En lugar de dibujar la interfaz en el ESP32 (LVGL, fuentes, iconos, layout…), 
 *display tonto*:
 
 1. Baja el JPEG por WiFi: `GET /api/display.jpg?page=N`
-2. Lo decodifica (JPEGDEC) en un buffer de PSRAM y lo copia al **framebuffer de
-   atrás** (RGB565), aplicando el **brillo** configurado
+2. Lo decodifica (JPEGDEC) **directo sobre el framebuffer de atrás** (RGB565),
+   aplicando el **brillo** configurado en la misma pasada (sin buffer intermedio)
 3. Hace **swap** de framebuffer alineado a **vsync** (doble buffer + bounce
    buffer) → **sin tearing ni desplazamiento**
 4. Lee el **touch** (GT911) y mapea el toque a la pestaña correspondiente
@@ -171,7 +171,7 @@ stubs/              Header vacío de esp-dsp (JPEGDEC con -DNO_SIMD)
 
 ## Estado
 
-Firmware **v1.2.0**, funcionando en hardware. Validado en la placa: decodificado
+Firmware **v1.2.1**, funcionando en hardware. Validado en la placa: decodificado
 y pintado del JPEG, swap de framebuffer sin tearing, reset y lectura del GT911,
 navegación por pestañas, BME280, portal de configuración (modo AP y LAN),
 escaneo de redes, brillo, offsets en vivo y actualización por OTA.

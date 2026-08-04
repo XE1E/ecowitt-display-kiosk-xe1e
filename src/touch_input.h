@@ -52,14 +52,6 @@ static void _gt911_write(uint16_t reg, uint8_t val)
     Wire.endTransmission();
 }
 
-// Lectura cruda del registro de estado del GT911 (debug): 0xFE si falla el I2C.
-inline uint8_t touch_input_raw_status()
-{
-    uint8_t s = 0xFF;
-    if (!_gt911_read(GT911_REG_STATUS, &s, 1)) return 0xFE;
-    return s;
-}
-
 inline void touch_input_begin()
 {
     IO_EXTENSION_Init();                       // CH422G (reset touch, backlight)

@@ -160,11 +160,12 @@ static int _center_x(const char *text, int scale) {
     return (SCREEN_WIDTH - _text_width(text, scale)) / 2;
 }
 
-// Llena la pantalla
+// Llena la pantalla: pinta la primera fila y replica con memcpy. Pixel a pixel
+// son 614400 escrituras sueltas a la PSRAM; asi es una fila y 599 copias.
 static void _fill_screen(uint16_t *fb, uint16_t color) {
-    for (int i = 0; i < SCREEN_WIDTH * SCREEN_HEIGHT; i++) {
-        fb[i] = color;
-    }
+    for (int x = 0; x < SCREEN_WIDTH; x++) fb[x] = color;
+    for (int y = 1; y < SCREEN_HEIGHT; y++)
+        memcpy(fb + (size_t)y * SCREEN_WIDTH, fb, (size_t)SCREEN_WIDTH * 2);
 }
 
 // Dibuja rectángulo

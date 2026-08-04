@@ -14,6 +14,8 @@
  * nueva la decodifica en el FB de atras. El swap espera vsync para alinearse con
  * el inicio del barrido -> sin tearing ni desplazamiento. El refresco de datos
  * tambien escribe al FB de atras y hace swap (true double buffering).
+ * g_fbPage[] es la contabilidad de esa cache: lo que pinte algo que no sea una
+ * pagina (spinner, info) tiene que invalidar su entrada. Ver ARQUITECTURA.md.
  *
  * Tareas: core 1 (loop) sondea el touch; core 0 (netTask) baja/decodifica/pinta
  * y envia el BME280.
@@ -24,7 +26,6 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <math.h>
-#include <esp_heap_caps.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -63,6 +64,9 @@ static const int SPINNER_CY = SCREEN_HEIGHT / 2;  // centro Y
 static const int SPINNER_R1 = 30;                 // radio interno
 static const int SPINNER_R2 = 50;                 // radio externo
 static const int SPINNER_SEGMENTS = 8;            // número de barras
+// Medio lado de la caja que ocupa el spinner (radio externo + el grosor de la
+// barra). Solo estas filas se repintan al animarlo, en vez de la pantalla entera.
+static const int SPINNER_BOX = SPINNER_R2 + 6;
 
 // Colores RGB565 para el degradado del spinner (de más brillante a más oscuro)
 static const uint16_t SPINNER_COLORS[SPINNER_SEGMENTS] = {
@@ -106,7 +110,7 @@ static void fb_thick_line(uint16_t *fb, int x0, int y0, int x1, int y1, uint16_t
 static void draw_spinner(uint16_t *fb, int active)
 {
     for (int i = 0; i < SPINNER_SEGMENTS; i++) {
-        float angle = (float)i * 2.0f * 3.14159f / SPINNER_SEGMENTS - 3.14159f / 2.0f;
+        float angle = (float)i * 2.0f * (float)M_PI / SPINNER_SEGMENTS - (float)M_PI / 2.0f;
         int x0 = SPINNER_CX + (int)(SPINNER_R1 * cosf(angle));
         int y0 = SPINNER_CY + (int)(SPINNER_R1 * sinf(angle));
         int x1 = SPINNER_CX + (int)(SPINNER_R2 * cosf(angle));
@@ -117,21 +121,32 @@ static void draw_spinner(uint16_t *fb, int active)
     }
 }
 
-static volatile int g_spinner_frame = 0;  // frame actual del spinner
+static int g_spinner_frame = 0;  // frame actual del spinner (solo bajo g_fbmux)
 
 // ── Estado compartido ────────────────────────────────────────────────────
+// Contenido de cada framebuffer: un id de pagina (1..MAX_PAGE_ID) si tiene una
+// pagina lista para "swap puro", o uno de estos dos marcadores. TODO lo que pinte
+// algo que no sea una pagina DEBE dejar la entrada en FB_INVALID/FB_SPINNER: si no,
+// el swap puro presentaria ese contenido creyendo que es la pagina (y se quedaria
+// asi hasta el refresco por intervalo).
+static const int FB_INVALID =  0;   // contenido que no corresponde a ninguna pagina
+static const int FB_SPINNER = -1;   // negro + spinner de carga
+
+// g_fbPage/g_shownFb los escribe el netTask y, para el spinner del toque, el
+// loop(): volatile + g_fbmux (el mutex da la exclusion; volatile evita que el
+// compilador se quede con una copia en registro).
 static uint16_t *g_fb[2]     = { nullptr, nullptr };  // los 2 framebuffers del panel
-static int       g_fbPage[2] = { 0, 0 };              // que pagina tiene cada FB (0=ninguna)
-static int       g_shownFb   = 0;                     // indice del FB mostrado
-static uint16_t *g_scratch   = nullptr;               // buffer de decodificacion (offscreen)
+static volatile int g_fbPage[2] = { FB_INVALID, FB_INVALID };  // que tiene cada FB
+static volatile int g_shownFb   = 0;                  // indice del FB mostrado
 static uint32_t  g_fetched[MAX_PAGE_ID + 1] = { 0 };  // millis del ultimo fetch por pagina (1..MAX_PAGE_ID)
 
 static volatile int g_page  = 1;   // pagina deseada (la cambia el touch)
 static volatile int g_shown = 0;   // pagina mostrada actualmente
-static volatile bool g_blackout = false;  // true si ya se oscureció desde touch
 static volatile bool g_info_request = false;  // toque largo: mostrar pantalla de info
+static volatile bool g_info_showing = false;  // pantalla de info en pantalla (la cierra un toque)
 static SemaphoreHandle_t g_wake;   // despierta al netTask (tap o arranque)
 static SemaphoreHandle_t g_i2c;    // serializa el bus I2C (touch core1 + BME core0)
+static SemaphoreHandle_t g_fbmux;  // serializa quien dibuja en los framebuffers
 
 static LocalSensorData g_local;
 
@@ -162,24 +177,33 @@ static inline void dim_copy(uint16_t *dst, const uint16_t *src, size_t px)
     }
 }
 
-// ── Baja + decodifica la pagina y la copia al framebuffer indicado ──────────
-// La copia va en trozos con flush+micro-pausa para no saturar el bus PSRAM (si
-// fbIdx es el FB mostrado, ahi ocurre el unico brinca; poco seguido).
+// ── Baja + decodifica la pagina DIRECTO sobre el framebuffer indicado ───────
+// Sin buffer intermedio: JPEGDEC escribe cada bloque en el framebuffer de atras y
+// dim_copy le aplica el brillo en la misma pasada. Antes se decodificaba a un
+// scratch en PSRAM y se copiaba: 1.2 MB de lectura + 1.2 MB de escritura extra por
+// refresco, mas 1.2 MB de PSRAM reservados.
+//
+// El FB de atras NO se muestra, asi que verlo llenarse no es un problema; pero
+// mientras se decodifica ya no tiene la pagina que tenia -> se invalida ANTES de
+// tocarlo, y solo se vuelve a marcar si el decode termina bien.
+//
+// El flush cache->PSRAM se sigue haciendo por trozos con micro-pausa: es lo que
+// reparte el trafico de bus para no dejar sin datos al DMA del panel (que es la
+// causa de las rayitas, ver docs/DISPLAY_ISSUES.md).
 static bool load_into(int fbIdx, int page)
 {
     const uint8_t *jpg = nullptr;
     size_t jpg_len = 0;
     if (!net_fetch_display(page, &jpg, &jpg_len)) return false;
-    if (!jpeg_decode_to_fb(jpg, jpg_len, g_scratch)) return false;
+
+    g_fbPage[fbIdx] = FB_INVALID;
+    if (!jpeg_decode_to_fb(jpg, jpg_len, g_fb[fbIdx], dim_copy)) return false;
 
     const int CHUNK_ROWS = 30;
-    const size_t row_px = (size_t)SCREEN_WIDTH;
-
     for (int y = 0; y < SCREEN_HEIGHT; y += CHUNK_ROWS) {
         int rows = min(CHUNK_ROWS, SCREEN_HEIGHT - y);
-        size_t off_px = (size_t)y * row_px, n_px = (size_t)rows * row_px;
-        dim_copy(g_fb[fbIdx] + off_px, g_scratch + off_px, n_px);
-        waveshare_fb_flush(g_fb[fbIdx] + off_px, n_px * 2);
+        size_t off_px = (size_t)y * SCREEN_WIDTH;
+        waveshare_fb_flush(g_fb[fbIdx] + off_px, (size_t)rows * SCREEN_WIDTH * 2);
         delayMicroseconds(200);
     }
     g_fbPage[fbIdx]  = page;
@@ -195,34 +219,44 @@ static bool page_is_cached(int page)
     return false;
 }
 
-// ── Muestra pantalla negra con spinner (llamar desde touch) ─────────────────
-static void blackout_with_spinner()
+// ── Pantalla negra con spinner: la pinta en el FB de atras y la presenta ─────
+// Llamar SIEMPRE con g_fbmux tomado. Marca ese FB como FB_SPINNER: ya no tiene
+// una pagina que se pueda presentar con un swap puro.
+static void spinner_present()
 {
     int back = g_shownFb ^ 1;
     memset(g_fb[back], 0, FB_BYTES);
     g_spinner_frame = 0;
     draw_spinner(g_fb[back], g_spinner_frame);
     waveshare_fb_flush(g_fb[back], FB_BYTES);
+    g_fbPage[back] = FB_SPINNER;
     waveshare_wait_vsync(50);
     waveshare_swap_fb(g_fb[back]);
     g_shownFb = back;
-    g_blackout = true;
 }
 
-// ── Avanza el spinner un frame ──────────────────────────────────────────────
-static void spinner_tick()
+// ── Avanza el spinner un frame, EN SITIO ────────────────────────────────────
+// Repinta solo la caja del spinner sobre el FB que ya se esta mostrando (que es
+// negro entero, asi que basta limpiar sus filas). Sin swap y sin tocar el FB de
+// atras: ~220 KB de bus en vez de los 2.4 MB de repintar la pantalla completa en
+// el otro framebuffer, y el FB de atras conserva la pagina anterior para el swap
+// puro. Requiere que el FB mostrado sea FB_SPINNER.
+static void spinner_animate()
 {
-    int back = g_shownFb ^ 1;
-    memset(g_fb[back], 0, FB_BYTES);
+    uint16_t *fb = g_fb[g_shownFb];
+    int y0 = max(0, SPINNER_CY - SPINNER_BOX);
+    int y1 = min(SCREEN_HEIGHT, SPINNER_CY + SPINNER_BOX);
+    size_t off_px = (size_t)y0 * SCREEN_WIDTH;
+    size_t n_px   = (size_t)(y1 - y0) * SCREEN_WIDTH;
+
+    memset(fb + off_px, 0, n_px * 2);
     g_spinner_frame = (g_spinner_frame + 1) % SPINNER_SEGMENTS;
-    draw_spinner(g_fb[back], g_spinner_frame);
-    waveshare_fb_flush(g_fb[back], FB_BYTES);
-    waveshare_wait_vsync(50);
-    waveshare_swap_fb(g_fb[back]);
-    g_shownFb = back;
+    draw_spinner(fb, g_spinner_frame);
+    waveshare_fb_flush(fb + off_px, n_px * 2);
 }
 
 // ── Muestra una pagina ──────────────────────────────────────────────────────
+// Llamar SIEMPRE con g_fbmux tomado.
 static void show(int page)
 {
     if (page < 1 || page > MAX_PAGE_ID) return;
@@ -233,34 +267,27 @@ static void show(int page)
             waveshare_swap_fb(g_fb[i]);
             g_shownFb = i;
             g_shown = page;
-            g_blackout = false;
             return;
         }
     }
 
-    // No cacheada: mostrar spinner si no se hizo desde touch, luego cargar.
-    if (!g_blackout) {
-        int back = g_shownFb ^ 1;
-        memset(g_fb[back], 0, FB_BYTES);
-        g_spinner_frame = 0;
-        draw_spinner(g_fb[back], g_spinner_frame);
-        waveshare_fb_flush(g_fb[back], FB_BYTES);
-        waveshare_wait_vsync(50);
-        waveshare_swap_fb(g_fb[back]);
-        g_shownFb = back;
-    }
-    g_blackout = false;
+    // No cacheada: si el toque ya dejo el spinner en pantalla, solo se avanza un
+    // frame (barato); si no, se pinta entero.
+    if (g_fbPage[g_shownFb] == FB_SPINNER) spinner_animate();
+    else                                   spinner_present();
 
-    // Animar spinner mientras carga
-    spinner_tick();
-
-    // Cargar la página en el FB de atrás y mostrar
+    // Cargar la página en el FB de atrás y mostrar.
     int back = g_shownFb ^ 1;
     if (load_into(back, page)) {
         waveshare_wait_vsync(50);
         waveshare_swap_fb(g_fb[back]);
         g_shownFb = back;
         g_shown = page;
+    } else {
+        // Fallo la descarga: lo que se muestra es el spinner, no una pagina. Sin
+        // esto g_shown seguiria apuntando a la pagina anterior y volver a tocar
+        // SU pestaña no haria nada -> spinner congelado hasta el refresco.
+        g_shown = 0;
     }
 }
 
@@ -270,7 +297,7 @@ static void show(int page)
 static void on_display_settings_changed()
 {
     build_dim_luts(g_set.brightness);
-    for (int i = 0; i < 2; i++) g_fbPage[i] = 0;
+    for (int i = 0; i < 2; i++) g_fbPage[i] = FB_INVALID;
     for (int i = 0; i <= MAX_PAGE_ID; i++) g_fetched[i] = 0;
     g_shown = 0;                       // fuerza a netTask a recargar g_page
     xSemaphoreGive(g_wake);
@@ -296,19 +323,27 @@ static void netTask(void *)
 
         // Toque largo: pantalla de info con la IP y la URL del portal. Se dibuja
         // AQUI (core 0) y no en el loop del touch, para que solo una tarea toque
-        // los framebuffers. Se queda 15 s o hasta que se toque una pestaña.
+        // los framebuffers. Se queda 15 s o hasta que se toque la pantalla.
         if (g_info_request) {
             g_info_request = false;
+            xSemaphoreTake(g_fbmux, portMAX_DELAY);
             int back = g_shownFb ^ 1;
             info_screen_show(g_fb[back], WiFi.SSID().c_str(),
                              WiFi.localIP().toString().c_str(), WiFi.RSSI());
-            g_fbPage[back] = 0;          // ese FB ya no tiene una pagina valida
+            g_fbPage[back] = FB_INVALID;   // ese FB ya no tiene una pagina valida
             g_shownFb = back;
+            xSemaphoreGive(g_fbmux);
+
+            g_info_showing = true;         // cualquier toque la baja (lo hace loop())
             uint32_t t0 = millis();
-            while (millis() - t0 < 15000 && g_page == g_shown) delay(50);
-            g_shown = 0;                 // forzar recarga de la pagina al salir
+            while (millis() - t0 < 15000 && g_info_showing && g_page == g_shown)
+                delay(50);
+            g_info_showing = false;
+            g_shown = 0;                   // forzar recarga de la pagina al salir
             continue;
         }
+
+        xSemaphoreTake(g_fbmux, portMAX_DELAY);
 
         int page = g_page;
 
@@ -329,6 +364,8 @@ static void netTask(void *)
             }
         }
         g_status.page = g_shown;
+
+        xSemaphoreGive(g_fbmux);
 
         // BME280: leer y enviar cada g_set.bme_interval segundos. La LECTURA toma
         // el mutex de I2C (el bus lo comparte con el touch del core 1). Tanto el
@@ -383,10 +420,6 @@ void setup()
     // el portal ya escucha en la IP de la LAN.
     wifi_config_begin();
 
-    // Buffer de decodificacion (offscreen) en PSRAM.
-    g_scratch = (uint16_t *)heap_caps_malloc(FB_BYTES, MALLOC_CAP_SPIRAM);
-    if (!g_scratch) Serial.println("[boot] ERROR: sin PSRAM para el buffer de decode");
-
     // Touch + BME280. El sensor se inicializa siempre (asi el portal puede
     // reportar si responde); que se ENVIE al servidor depende de g_set.bme_enabled.
     touch_input_begin();
@@ -396,9 +429,11 @@ void setup()
     setBME280HumidityOffset(g_set.off_hum);
     setBME280PressureOffset(g_set.off_press);
 
-    // Mutex de I2C + task de red en el core 0; el loop() (touch) corre en el core 1.
-    g_i2c  = xSemaphoreCreateMutex();
-    g_wake = xSemaphoreCreateBinary();
+    // Mutex de I2C y de framebuffers + task de red en el core 0; el loop() (touch)
+    // corre en el core 1. Los dos se crean ANTES del netTask: ambos los usa.
+    g_i2c   = xSemaphoreCreateMutex();
+    g_fbmux = xSemaphoreCreateMutex();
+    g_wake  = xSemaphoreCreateBinary();
     xTaskCreatePinnedToCore(netTask, "net", 8192, nullptr, 1, nullptr, 0);
 
     // El portal puede cambiar brillo/intervalo en caliente. Se registra DESPUES
@@ -424,6 +459,10 @@ void loop()
     if (tapped) {
         int new_page = 0;
 
+        // Pantalla de info en pantalla: cualquier toque la baja (es lo que dice
+        // su pie). Si el toque cae en la barra, ademas cambia de pagina, abajo.
+        if (g_info_showing) g_info_showing = false;
+
         if (g_shown == PAGE_CONSOLA) {
             // Consola (full-screen, sin barra): un toque en CUALQUIER parte regresa
             // a la página 1 (principal).
@@ -443,10 +482,15 @@ void loop()
             g_press_start = millis();
         }
 
-        // Si hay cambio de página, oscurecer inmediatamente si no está en caché
+        // Si hay cambio de página, oscurecer inmediatamente si no está en caché.
+        // El spinner se pinta AQUI (core 1) para que el toque responda al
+        // instante; es la unica excepcion a "solo netTask dibuja", asi que va bajo
+        // g_fbmux. Con try-lock: si el netTask esta en medio de una carga no se
+        // oscurece (la pagina nueva esta a punto de aparecer igual).
         if (new_page > 0 && new_page != g_page) {
-            if (!page_is_cached(new_page)) {
-                blackout_with_spinner();  // spinner instantáneo desde el touch
+            if (!page_is_cached(new_page) && xSemaphoreTake(g_fbmux, 0) == pdTRUE) {
+                spinner_present();
+                xSemaphoreGive(g_fbmux);
             }
             g_page = new_page;
             xSemaphoreGive(g_wake);

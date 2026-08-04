@@ -12,9 +12,13 @@
  *
  ******************************************************************************/
 #include "io_extension.h"  // Include IO_EXTENSION driver header for GPIO functions
-#include <Arduino.h>       // For constrain()
-#include <math.h>          // For pow() in logarithmic brightness curve
- 
+
+// De este driver solo se usa lo que necesita esta placa: poner pines en salida y
+// escribirlos (reset del GT911 en IO1, backlight en IO2). Las funciones de entrada,
+// PWM y ADC del original se quitaron: no se usan, y la de PWM ademas confundia
+// (el backlight de esta placa cuelga de un expansor DIGITAL, sin PWM; el brillo se
+// hace escalando los pixeles en main.cpp).
+
 io_extension_obj_t IO_EXTENSION;  // Define the global IO_EXTENSION object
 
 /**
@@ -71,66 +75,3 @@ void IO_EXTENSION_Output(uint8_t pin, uint8_t value)
     DEV_I2C_Write_Nbyte(IO_EXTENSION.addr, data, 2);
 }
 
-/**
- * @brief Read the value from the IO input pins on the IO_EXTENSION device.
- * 
- * This function reads the value of the IO input register and returns the state
- * of the specified pins.
- * 
- * @param pin The bit mask to specify which pin to read (e.g., 0x01 for the first pin).
- * @return The value of the specified pin(s) (0 = low, 1 = high).
- */
-uint8_t IO_EXTENSION_Input(uint8_t pin) 
-{
-    uint8_t value = 0;
-
-    // Read the value of the input pins
-    DEV_I2C_Read_Nbyte(IO_EXTENSION.addr, IO_EXTENSION_IO_INPUT_ADDR, &value, 1);
-    // Return the value of the specific pin(s) by masking with the provided bit mask
-    return ((value & (1 << pin)) > 0);
-}
-
-/**
- * @brief Set the PWM output value on the IO_EXTENSION device.
- *
- * This function sets the PWM output value using a logarithmic curve
- * for perceptually linear brightness control. Human eye perceives
- * brightness logarithmically, so this curve makes slider feel natural.
- *
- * @param Value The input value to set brightness (0-100).
- */
-void IO_EXTENSION_Pwm_Output(uint8_t Value)
-{
-    // Clamp to valid range
-    if (Value > 100) Value = 100;
-
-    // Prevent screen from completely turning off (min ~1%)
-    if (Value < 1) Value = 1;
-
-    // Logarithmic curve: PWM = 255 * (10^(value/100) - 1) / 9
-    // This gives smooth perceived brightness from 1-100
-    // At value=1:   PWM ~3   (dim but visible)
-    // At value=50:  PWM ~80  (mid brightness)
-    // At value=100: PWM ~255 (full brightness)
-    float normalized = Value / 100.0f;
-    float pwm_float = 255.0f * (pow(10.0f, normalized) - 1.0f) / 9.0f;
-
-    // Clamp to 8-bit range (max 247 to prevent issues)
-    uint8_t pwm_value = (uint8_t)constrain((int)pwm_float, 3, 247);
-
-    uint8_t data[2] = {IO_EXTENSION_PWM_ADDR, pwm_value};
-    DEV_I2C_Write_Nbyte(IO_EXTENSION.addr, data, 2);
-}
-
-/**
- * @brief Read the ADC input value from the IO_EXTENSION device.
- * 
- * This function reads the ADC input value from the IO_EXTENSION device.
- * 
- * @return The ADC input value.
- */
-uint16_t IO_EXTENSION_Adc_Input()
-{
-    // Read the ADC input value from the IO_EXTENSION device
-    return DEV_I2C_Read_Word(IO_EXTENSION.addr, IO_EXTENSION_ADC_ADDR);
-}

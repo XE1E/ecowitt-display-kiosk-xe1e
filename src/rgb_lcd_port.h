@@ -99,32 +99,6 @@
  * @brief Function Declarations
  */
 esp_lcd_panel_handle_t waveshare_esp32_s3_rgb_lcd_init();
-/**
- * @brief Turn on the LCD backlight.
- */
-void wavesahre_rgb_lcd_bl_on();
-/**
- * @brief Turn off the LCD backlight.
- */
-void wavesahre_rgb_lcd_bl_off();
-
-/**
- * @brief Display a rectangular region of an image on the RGB LCD.
- *
- * @param Xstart Starting X coordinate of the region.
- * @param Ystart Starting Y coordinate of the region.
- * @param Xend Ending X coordinate of the region.
- * @param Yend Ending Y coordinate of the region.
- * @param Image Pointer to the image data buffer.
- */
-void wavesahre_rgb_lcd_display_window(int16_t Xstart, int16_t Ystart, int16_t Xend, int16_t Yend, uint8_t *Image);
-
-/**
- * @brief Display a full-frame image on the RGB LCD.
- *
- * @param Image Pointer to the image data buffer.
- */
-void wavesahre_rgb_lcd_display(uint8_t *Image);
 
 /**
  * @brief Retrieve pointers to the frame buffers for double buffering.
@@ -133,13 +107,6 @@ void wavesahre_rgb_lcd_display(uint8_t *Image);
  * @param buf2 Pointer to hold the address of the second frame buffer.
  */
 void waveshare_get_frame_buffer(void **buf1, void **buf2);
-
-/**
- * @brief Presenta un framebuffer del driver (fb0/fb1) con flush de cache +
- *        swap instantaneo en vsync. Usar tras escribir el frame con la CPU en
- *        uno de los framebuffers devueltos por waveshare_get_frame_buffer().
- */
-void waveshare_present_fb(void *fb);
 
 /** Flush de un tramo del framebuffer (cache CPU -> PSRAM), para repartir el
  *  trafico de bus copiando por trozos. Ver waveshare_swap_fb. */

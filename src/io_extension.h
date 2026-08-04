@@ -32,12 +32,9 @@
  #define IO_EXTENSION_ADDR          0x24  // Slave address for mode configuration register
  
  /* Mode control flags (from the chip manual) */
- #define IO_EXTENSION_Mode             0x02 // 
- #define IO_EXTENSION_IO_OUTPUT_ADDR   0x03 // 
- #define IO_EXTENSION_IO_INPUT_ADDR    0x04 // 
- #define IO_EXTENSION_PWM_ADDR         0x05 // 
- #define IO_EXTENSION_ADC_ADDR         0x06 // 
- 
+ #define IO_EXTENSION_Mode             0x02 //
+ #define IO_EXTENSION_IO_OUTPUT_ADDR   0x03 //
+
  /* Specific IO pin assignments */
  #define IO_EXTENSION_IO_0          0x00  // IO0 
  #define IO_EXTENSION_IO_1          0x01  // IO1 (used for touch reset)
@@ -59,9 +56,6 @@
  /* Function declarations */
  void IO_EXTENSION_Init();                     // Initialize the IO_EXTENSION device
  void IO_EXTENSION_Output(uint8_t pin, uint8_t value);     // Set IO pin output (high/low)
- uint8_t IO_EXTENSION_Input(uint8_t pin);   // Read IO pin input state
- void IO_EXTENSION_Pwm_Output(uint8_t Value);
- uint16_t IO_EXTENSION_Adc_Input();
- 
+
  #endif  // __IO_EXTENSION_H
  

@@ -1,8 +1,14 @@
 # Plan — Consola: nueva cara de la estación (display kiosko)
 
-> Última actualización: 2026-07-25. Vive en git (repo del firmware).
+> Última actualización: 2026-08-04. Vive en git (repo del firmware).
 > Cruza dos repos: **firmware** `ecowitt-display-kiosk-xe1e` (esta) y
 > **servidor** `ecowitt-weather-server-xe1e` (renderiza las páginas).
+
+> **Estado (2026-08-04): la fase inmediata está TERMINADA** — 6ª pestaña,
+> consola full-screen, toque para regresar y fuente DSEG en los números, todo
+> hecho y desplegado en las dos mitades. Lo que sigue abierto es la **fase
+> futura**: la consola como pantalla principal y las **zonas de toque por
+> bloque** (decisión 4, aún sin definir).
 
 ## Idea
 
@@ -24,12 +30,12 @@ pantalla **principal/home**, y desde ella el toque llevará a pantallas de detal
   en la franja inferior (`y >= 490`) a la pestaña por la X (`x*NUM_PAGES/1024`).
   Ver `src/main.cpp` y `docs/ARQUITECTURA.md`.
 
-## Fase inmediata — dejar la consola FUNCIONANDO (mínimos cambios)
+## Fase inmediata — dejar la consola FUNCIONANDO (mínimos cambios) ✅ HECHA
 
 Objetivo: llegar a la consola desde una **6ª pestaña**, y desde la consola
 **regresar con un toque**. No se toca la navegación de las 5 páginas.
 
-### Servidor (`ecowitt-weather-server-xe1e`)
+### Servidor (`ecowitt-weather-server-xe1e`) ✅
 1. **6ª pestaña "Consola"** (🖥️) en la barra inferior de las páginas 1‑5
    (`KioskPage.tsx`, arreglo `TABS`). La consola en sí ya existe (`?page=consola`).
 2. **Fuente 7‑segmentos (DSEG) SOLO en la consola** — en los **números** grandes
@@ -38,7 +44,7 @@ Objetivo: llegar a la consola desde una **6ª pestaña**, y desde la consola
    `@font-face` data-URI dentro de la rama `page==='consola'` (OFL, de keshikan/DSEG).
    El renderer (Chromium) la usará al capturar.
 
-### Firmware (`ecowitt-display-kiosk-xe1e`)
+### Firmware (`ecowitt-display-kiosk-xe1e`) ✅
 1. Barra táctil de **6 pestañas** (la 6ª → consola). La consola es una **página
    especial a pantalla completa** que baja `?page=consola` (no numérica).
    - Idea: id interno `PAGE_CONSOLA` (p. ej. 6); `net_fetch_display` mapea ese id a
@@ -53,7 +59,7 @@ El nº de pestañas de la barra (servidor) DEBE coincidir con el mapeo del touch
 (firmware). Al pasar de 5 a 6: `TABS` en `KioskPage` (6 entradas) ↔ mapeo del touch
 a 6 en `main.cpp`. La 6ª es especial (va a `?page=consola`, no a `page=6`).
 
-## Fase futura — la visión (cuando se desarrolle)
+## Fase futura — la visión (PENDIENTE, es lo que queda)
 
 - La **consola pasa a ser la principal/home** (el display arranca en ella).
 - **Zonas de toque por bloque** de la rejilla 3×5 → pantalla de detalle. Mapeo

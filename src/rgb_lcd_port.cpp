@@ -115,45 +115,18 @@ void waveshare_wait_vsync(uint32_t timeout_ms)
     }
 }
 
-void wavesahre_rgb_lcd_display_window(int16_t Xstart, int16_t Ystart, int16_t Xend, int16_t Yend, uint8_t *Image)
-{
-    if (Xstart < 0) Xstart = 0;
-    else if (Xend > EXAMPLE_LCD_H_RES) Xend = EXAMPLE_LCD_H_RES;
-    if (Ystart < 0) Ystart = 0;
-    else if (Yend > EXAMPLE_LCD_V_RES) Yend = EXAMPLE_LCD_V_RES;
-
-    esp_lcd_panel_draw_bitmap(panel_handle, Xstart, Ystart, Xend, Yend, Image);
-}
-
-void wavesahre_rgb_lcd_display(uint8_t *Image)
-{
-    esp_lcd_panel_draw_bitmap(panel_handle, 0, 0, EXAMPLE_LCD_H_RES, EXAMPLE_LCD_V_RES, Image);
-}
-
-// Presenta un framebuffer que YA es uno de los framebuffers del driver (fb0/fb1).
-// A diferencia de pasar un buffer externo (que el driver copia ~20ms, cruzando
-// el vsync y desfasando el reinicio del barrido -> "salto"), aqui:
-//   1. Se hace el flush de cache C->PSRAM del framebuffer (lo escribio la CPU;
-//      con swap "zero-copy" el driver NO sincroniza la cache por nosotros).
-//   2. draw_bitmap con el puntero de un framebuffer solo marca el swap para el
-//      proximo vsync (instantaneo) -> reinicio limpio, sin salto.
-void waveshare_present_fb(void *fb)
-{
-    esp_cache_msync(fb, EXAMPLE_LCD_H_RES * EXAMPLE_LCD_V_RES * 2,
-                    ESP_CACHE_MSYNC_FLAG_DIR_C2M);
-    esp_lcd_panel_draw_bitmap(panel_handle, 0, 0, EXAMPLE_LCD_H_RES, EXAMPLE_LCD_V_RES, fb);
-}
-
 // Flush de un tramo del framebuffer (cache CPU -> PSRAM). Se llama por trozos
-// junto con la copia para repartir el trafico de bus y no starvar al DMA.
+// junto con la copia para repartir el trafico de bus y no starvar al DMA. Con el
+// swap "zero-copy" el driver NO sincroniza la cache por nosotros.
 void waveshare_fb_flush(void *addr, size_t bytes)
 {
     esp_cache_msync(addr, bytes, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
 }
 
-// Marca el swap del framebuffer. El driver de ESP-IDF aplica el cambio en el
-// próximo vsync automáticamente cuando el puntero es uno de los framebuffers
-// internos del panel.
+// Marca el swap del framebuffer. Pasar el puntero de uno de los framebuffers del
+// driver (fb0/fb1) NO copia nada: solo conmuta en el proximo vsync, asi que el
+// reinicio del barrido es limpio (un buffer externo si se copia, ~20 ms, y ahi
+// aparecia el "salto"). El driver aplica el cambio solo.
 void waveshare_swap_fb(void *fb)
 {
     esp_lcd_panel_draw_bitmap(panel_handle, 0, 0, EXAMPLE_LCD_H_RES, EXAMPLE_LCD_V_RES, fb);
@@ -168,6 +141,3 @@ void waveshare_get_frame_buffer(void **buf1, void **buf2)
     if (buf2) *buf2 = NULL;
 #endif
 }
-
-void wavesahre_rgb_lcd_bl_on()  {}
-void wavesahre_rgb_lcd_bl_off() {}

@@ -121,17 +121,4 @@ bool isBME280Available() {
     return bmeInitialized;
 }
 
-// ============================================================================
-// Get formatted string
-// ============================================================================
-
-void getBME280String(char* buffer, size_t size, const LocalSensorData& data) {
-    if (data.valid) {
-        snprintf(buffer, size, "%.1f°C  %.0f%%  %.0fhPa",
-                 data.temperature, data.humidity, data.pressure);
-    } else {
-        snprintf(buffer, size, "-- (sensor no disponible)");
-    }
-}
-
 #endif // BME280_SENSOR_H

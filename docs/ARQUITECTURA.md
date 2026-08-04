@@ -37,7 +37,11 @@ El driver `esp_lcd` nativo se configura con `num_fbs=2` (doble framebuffer) y
 `bounce_buffer_size_px = H_RES*10`. El flujo:
 
 1. `waveshare_get_frame_buffer()` devuelve los dos framebuffers en PSRAM.
-2. Se decodifica el JPEG sobre el framebuffer **de atrás** (el que no se muestra).
+2. Se decodifica el JPEG **directo** sobre el framebuffer **de atrás** (el que no
+   se muestra), aplicando el brillo fila por fila en la misma pasada: no hay
+   buffer intermedio. El flush de caché→PSRAM va **por trozos de 30 filas con una
+   micro-pausa**, que es lo que reparte el tráfico de bus y evita dejar sin datos
+   al DMA del panel.
 3. `esp_lcd_panel_draw_bitmap(...)` con el puntero del framebuffer de atrás hace
    el **swap** (el driver reconoce el puntero como uno de sus FBs y conmuta sin
    copiar). Se alterna el índice en cada refresco.
@@ -57,23 +61,45 @@ debounce de 300 ms) para avanzar de página.
 de solo lectura en una red de confianza y no maneja secretos. El JPEG se baja a
 un buffer en PSRAM (256 KB de margen para imágenes de ~50 KB).
 
-## Pendiente de validar en hardware real
+## Validado en hardware (cómo quedó cada punto dudoso)
 
-Estas partes están escritas siguiendo la documentación y el código de ejemplo de
-Waveshare, pero **no se han podido probar en la placa** (no hay hardware en el
-entorno de desarrollo). Al primer flasheo, revisar:
+Todo lo que al principio estaba escrito "a ciegas" (siguiendo la documentación de
+Waveshare, sin placa en el entorno de desarrollo) ya se probó y quedó así:
 
-1. **Endianness del JPEG** (`jpeg_render.h`): se usa `RGB565_LITTLE_ENDIAN`. Si
-   los colores salen con rojo/azul invertidos, cambiar a `RGB565_BIG_ENDIAN`.
-2. **Semántica del swap** (`main.cpp` / `rgb_lcd_port.cpp`): confirmar que
-   `esp_lcd_panel_draw_bitmap` con el puntero de un framebuffer completo conmuta
-   sin copia y sin tearing. Si hubiera parpadeo, puede requerir
-   `CONFIG_LCD_RGB_RESTART_IN_VSYNC` o ajustar el uso del semáforo de vsync.
-3. **Reset/dirección del GT911** (`touch_input.h`): si el GT911 no responde,
-   probar la dirección de respaldo `0x14` y revisar los tiempos de la secuencia
-   de reset vía CH422G.
-4. **Timings del panel** (`rgb_lcd_port.cpp`): los back/front porch vienen del
-   ejemplo de Waveshare para este modelo; si la imagen sale desplazada, ajustar.
+1. **Endianness del JPEG** (`jpeg_render.h`): `RGB565_LITTLE_ENDIAN` es la
+   correcta para este panel; los colores salen bien.
+2. **Semántica del swap** (`main.cpp` / `rgb_lcd_port.cpp`):
+   `esp_lcd_panel_draw_bitmap` con el puntero de un framebuffer del driver
+   conmuta sin copia. Hizo falta, además: **`CONFIG_LCD_RGB_RESTART_IN_VSYNC=n`**
+   (con `=y` aparecían desplazamiento vertical y rayitas a la izquierda),
+   **`CONFIG_SPIRAM_XIP_FROM_PSRAM=y`** (Flash y PSRAM comparten bus en el S3; la
+   CPU buscando instrucciones en Flash dejaba al DMA sin bounce buffer), esperar
+   el semáforo de vsync antes de cada swap, y copiar al framebuffer **por trozos
+   con flush y micro-pausa** para no starvar al DMA. Detalle completo en
+   [`DISPLAY_ISSUES.md`](DISPLAY_ISSUES.md).
+3. **Reset/dirección del GT911** (`touch_input.h`): la secuencia por CH422G con
+   INT bajo funciona y responde en `0x5D`; no hizo falta la dirección `0x14`.
+   Sí hubo que detectar el **flanco** del toque puenteando los huecos en que el
+   GT911 deja `bit7=0` durante un toque sostenido (`TOUCH_RELEASE_MS`).
+4. **Timings del panel** (`rgb_lcd_port.cpp`): los back/front porch del ejemplo
+   de Waveshare son correctos para este modelo. Lo que sí se bajó es el bounce
+   buffer, a **3 líneas** (`H_RES*3`), que es lo que minimiza el desplazamiento.
+
+## Regla de coherencia de la caché de framebuffers
+
+`g_fbPage[]` dice qué página tiene cada framebuffer, y de ahí sale el "swap puro"
+al volver a una página. Por eso **todo lo que pinte algo que no sea una página
+(spinner, pantalla de info, pantalla de AP) tiene que invalidar esa entrada**
+(`FB_INVALID`, o `FB_SPINNER` si es el spinner). Si no, el firmware cree que ese
+framebuffer sigue teniendo una página válida y un cambio de pestaña lo presenta
+tal cual: se queda mostrando el spinner hasta el siguiente refresco por intervalo
+(hasta 15 min).
+
+Los framebuffers los escribe **solo el netTask** (core 0), salvo el spinner
+inmediato del toque, que se pinta desde `loop()` (core 1) para que el
+oscurecimiento sea instantáneo. Ese caso se serializa con el mutex `g_fbmux`, y
+el toque lo pide con *try-lock*: si el netTask está en medio de una carga, no
+oscurece (la página nueva está a punto de aparecer de todos modos).
 
 ## Origen del código de hardware
 

@@ -48,6 +48,7 @@ inline bool net_fetch_display(int page, const uint8_t **out, size_t *out_len)
     if (!_img_buf) return false;
     if (WiFi.status() != WL_CONNECTED && !wifi_config_reconnect()) {
         g_status.last_http = -1;      // sin WiFi
+        g_status.last_ms = 0;
         return false;
     }
 
@@ -62,6 +63,7 @@ inline bool net_fetch_display(int page, const uint8_t **out, size_t *out_len)
     if (!http.begin(client, url)) {
         Serial.println("[net] http.begin fallo");
         g_status.last_http = -2;      // URL invalida
+        g_status.last_ms = 0;
         return false;
     }
     http.setTimeout(15000);
@@ -78,19 +80,21 @@ inline bool net_fetch_display(int page, const uint8_t **out, size_t *out_len)
     int len = http.getSize();               // puede ser -1 (chunked)
     WiFiClient *stream = http.getStreamPtr();
     size_t total = 0;
+    bool   overflow = false;
     uint32_t last = millis();
     while (http.connected() && (len < 0 || total < (size_t)len)) {
         size_t avail = stream->available();
         if (avail) {
             if (total + avail > IMG_BUF_MAX) {
                 Serial.println("[net] imagen mas grande que el buffer");
-                http.end();
-                return false;
+                overflow = true;
+                break;
             }
             int r = stream->readBytes(_img_buf + total, avail);
             total += r;
             last = millis();
         } else if (millis() - last > 5000) {
+            Serial.println("[net] timeout leyendo el cuerpo");
             break;                           // timeout de lectura
         } else {
             delay(2);
@@ -100,7 +104,14 @@ inline bool net_fetch_display(int page, const uint8_t **out, size_t *out_len)
 
     g_status.last_ms    = millis() - t0;
     g_status.last_bytes = total;
-    if (total == 0) return false;
+    if (overflow || total == 0) return false;
+    // Descarga incompleta (se corto la conexion o expiro el timeout de lectura):
+    // el JPEG truncado o decodifica a medias o falla. Se descarta y se reintenta,
+    // asi nunca se pinta media pagina.
+    if (len > 0 && total != (size_t)len) {
+        Serial.printf("[net] descarga incompleta: %u de %d bytes\n", (unsigned)total, len);
+        return false;
+    }
     g_status.last_ok_at = millis();
     *out = _img_buf;
     *out_len = total;
