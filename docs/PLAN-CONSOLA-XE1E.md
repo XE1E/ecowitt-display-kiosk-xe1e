@@ -1,6 +1,6 @@
 # Plan — Consola: nueva cara de la estación (display kiosko)
 
-> Última actualización: 2026-08-04. Vive en git (repo del firmware).
+> Última actualización: 2026-08-05. Vive en git (repo del firmware).
 > Cruza dos repos: **firmware** `ecowitt-display-kiosk-xe1e` (esta) y
 > **servidor** `ecowitt-weather-server-xe1e` (renderiza las páginas).
 
@@ -82,12 +82,41 @@ a 6 en `main.cpp`. La 6ª es especial (va a `?page=consola`, no a `page=6`).
 4. Zonas de toque por bloque — **pendiente de definir** ("lo iremos viendo").
 
 ## Layout de la consola (referencia, rejilla 3×5)
+
+Estado real al **2026-08-05**. El bloque anterior de esta sección describía un
+reparto que nunca llegó a desplegarse (`RAIN | icono | PRESSURE REL` en la fila 3,
+sin ICA, sin luna aparte y sin la remota); se sustituye por lo que renderiza hoy
+`dashboard/src/components/station/ConsoleReplica.tsx` en el repo del servidor.
+
 ```
-OUTDOOR temp    | WIND (compás)      | GUST
-HUMIDITY        | DEWPOINT + FEELS   | AVERAGE
-RAIN (hoy)      | icono clima/luna   | PRESSURE REL
-IN TEMP         | UV + MOON          | SENSOR CH1
-TIME / DATE     | SUNLIGHT           | HEAT INDEX
+ fr   │ columna 1              │ columna 2                │ columna 3
+──────┼────────────────────────┼──────────────────────────┼────────────────────────
+ 1.23 │ EXT  temp + mín/máx    │ VIENTO — compás ovalado  │ VEL  velocidad + rumbo
+ 1.23 │ HUMEDAD  % + mín/máx   │   (fusionada, 2 filas)   │ LLUVIA evento/tasa/día
+ 1.18 │ PRES  + riel ±5 mb     │ condición (2/3) + LUNA   │ ROCÍO + SENSACIÓN
+ 1.00 │ INTERIOR  temp + hum   │ SOLAR + UV + ICA         │ REMOTA  temp + hum
+ 0.92 │ JARDÍN CH1  temp + hum │ reloj + fecha + título   │ PRESIÓN GW1100
 ```
-Datos vivos, unidades del dashboard (°C, km/h, mb, mm, W/m²). SENSOR mapea a CH1 y
-cae a la remota GW1100 si no hay canal.
+
+Notas que no se ven en el diagrama:
+
+- **Las filas 1 y 2 valen lo mismo a propósito.** EXT y HUMEDAD muestran la misma
+  estructura (valor grande arriba, línea de MÍN/MÁX abajo) y con altos distintos el
+  mín/máx de HUMEDAD quedaba pegado al valor. Repartirlas iguales no afecta a la
+  celda del VIENTO, que abarca las dos y sólo depende de la suma.
+- **Cifras grandes a 66 px** (EXT, HUMEDAD, VEL), unidad a 24 y el decimal a la
+  mitad del entero (`decxs`). 66 es el techo medido: por encima, la tinta del DSEG
+  invade la línea de mín/máx.
+- **`PRES` abreviado** en la fila 3 —con la lectura subida, "PRESIÓN" chocaba con el
+  número— mientras la fila 5 conserva `PRESIÓN GW1100`, que sí tiene sitio.
+- **Riel de presión**: variación de 3 h sobre ±5 hPa, con el rango fijo en hPa y
+  sólo los rótulos convertidos (en imperial son ±0.15 inHg). Mismos umbrales de
+  color que la flecha de tendencia (±1 hPa) para que no se contradigan.
+- **Marcadores de ubicación**: casa = sensor interior, casa con flecha = exterior.
+  Antes el de exterior era un sol amarillo, que junto a la celda de condición se
+  leía como estado del cielo.
+- **REMOTA** prefiere el WN32 exterior y cae al integrado del GW1100; la etiqueta
+  dice cuál de los dos se está viendo. **JARDÍN** mapea a CH1 y cae a la remota si
+  no hay canal.
+
+Datos vivos, unidades del dashboard (°C, km/h, mb, mm, W/m²).
