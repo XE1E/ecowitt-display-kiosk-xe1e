@@ -17,7 +17,9 @@
 #include <Arduino.h>
 
 // Version del firmware (se muestra en el bloque "Estado" del portal web).
-#define FW_VERSION "1.3.1"
+// 1.4.0: navegacion por zonas (X-Kiosk-Nav). Cambia el modelo de pagina de numero a
+// slug, asi que no es un parche: sube la minor.
+#define FW_VERSION "1.4.0"
 
 // ============================================================================
 // I2C (bus compartido: CH422G + GT911 + BME280)

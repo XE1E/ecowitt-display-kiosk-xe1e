@@ -1,14 +1,16 @@
 # Plan — Consola: nueva cara de la estación (display kiosko)
 
-> Última actualización: 2026-08-05. Vive en git (repo del firmware).
+> Última actualización: 2026-08-06. Vive en git (repo del firmware).
 > Cruza dos repos: **firmware** `ecowitt-display-kiosk-xe1e` (esta) y
 > **servidor** `ecowitt-weather-server-xe1e` (renderiza las páginas).
 
-> **Estado (2026-08-04): la fase inmediata está TERMINADA** — 6ª pestaña,
-> consola full-screen, toque para regresar y fuente DSEG en los números, todo
-> hecho y desplegado en las dos mitades. Lo que sigue abierto es la **fase
-> futura**: la consola como pantalla principal y las **zonas de toque por
-> bloque** (decisión 4, aún sin definir).
+> **Estado (2026-08-06): PLAN COMPLETO.** La fase inmediata se cerró el 2026-08-04
+> y la fase futura el 2026-08-06 con el firmware v1.4.0: la consola es la home y sus
+> celdas navegan al detalle de cada variable. La *decisión 4* —zonas de toque por
+> bloque, lo único que quedaba abierto— se resolvió de forma general con el mapa de
+> zonas que manda el servidor, así que **este repo ya no se toca para añadir
+> pantallas**. La continuación vive en `PLAN-KIOSCO-NAVEGACION.md`, en el repo del
+> servidor.
 
 ## Idea
 
@@ -59,27 +61,32 @@ El nº de pestañas de la barra (servidor) DEBE coincidir con el mapeo del touch
 (firmware). Al pasar de 5 a 6: `TABS` en `KioskPage` (6 entradas) ↔ mapeo del touch
 a 6 en `main.cpp`. La 6ª es especial (va a `?page=consola`, no a `page=6`).
 
-## Fase futura — la visión (PENDIENTE, es lo que queda)
+## Fase futura — HECHA (2026-08-06, firmware v1.4.0)
 
-- ✅ **HECHO (2026-08-04):** la **consola es la principal/home**, el display arranca
-  en ella (`PAGE_HOME` en `src/config.h`). Conserva su lugar como 6ª pestaña: el
-  arranque no cambió el orden ni el número de pestañas de la barra.
-- **Zonas de toque por bloque** de la rejilla 3×5 → pantalla de detalle. Mapeo
-  **tentativo** (se ajustará; las zonas serán distintas a la barra de pestañas):
-  - 🧭 **WIND** (compás) → rosa de vientos
-  - 📊 **PRESSURE** → tendencia de presión
-  - 🌧 **RAIN** → precipitación / histórico
-  - 🌡 **OUTDOOR** → tendencia 24 h
-  - 📡 **SENSOR CH1** → sensores / remota
-- **Pulido visual** de la consola.
-- **Fuente:** por ahora DSEG solo en la consola; a futuro se decidirá si se unifica
-  la tipografía de TODO el display.
+- ✅ **(2026-08-04)** la **consola es la principal/home**, el display arranca en ella
+  (`PAGE_HOME` en `src/config.h`).
+- ✅ **(2026-08-06) Zonas de toque por bloque.** Resuelto de forma **general**, no
+  celda a celda: el servidor manda con cada imagen los rectángulos tocables en la
+  cabecera `X-Kiosk-Nav` y el firmware sólo mira dónde cayó el toque. Las zonas se
+  miden del DOM, así que mover una celda no rompe su zona, y añadir pantallas ya no
+  toca este repo. Ver `README.md` y `docs/ARQUITECTURA.md`.
+
+  El mapeo real quedó más amplio que el tentativo de este plan: las seis variables
+  (temperatura, humedad, presión, viento, lluvia, sol/UV) tienen detalle con cuatro
+  periodos cada una, las celdas de sensores van a la página 3 —el rollup diario no
+  guarda los canales, así que no hay serie que enseñar— y el reloj abre un menú con
+  las cinco páginas clásicas y la cámara.
+- **Pulido visual** de la consola: en marcha, es continuo.
+- **Fuente:** DSEG sigue sólo en la consola y en las pantallas nuevas, que heredan su
+  estética. El resto del display conserva la condensada.
 
 ## Decisiones cerradas (2026-07-25)
 1. 6ª pestaña "Consola" — OK.
-2. Al tocar la consola → **regresa SIEMPRE a la página 1**.
+2. Al tocar la consola → regresaba SIEMPRE a la página 1. **Superado el 2026-08-06**:
+   ahora cada celda lleva a su detalle y el toque fuera de zona retrocede.
 3. Fuente **7‑segmentos (DSEG) solo en la consola** (en los números).
-4. Zonas de toque por bloque — **pendiente de definir** ("lo iremos viendo").
+4. Zonas de toque por bloque — **CERRADA el 2026-08-06** (ver arriba). Era lo único
+   que quedaba abierto de este plan.
 
 ## Layout de la consola (referencia, rejilla 3×5)
 

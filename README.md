@@ -15,7 +15,8 @@ En lugar de dibujar la interfaz en el ESP32 (LVGL, fuentes, iconos, layout…), 
    aplicando el **brillo** configurado en la misma pasada (sin buffer intermedio)
 3. Hace **swap** de framebuffer alineado a **vsync** (doble buffer + bounce
    buffer) → **sin tearing ni desplazamiento**
-4. Lee el **touch** (GT911) y mapea el toque a la pestaña correspondiente
+4. Lee el **touch** (GT911) y lo resuelve contra el **mapa de zonas** que viene con
+   cada imagen (cabecera `X-Kiosk-Nav`)
 5. Envía su **BME280** local al servidor (`POST /api/kiosk/local`); el servidor
    lo dibuja en la página 2
 
@@ -27,32 +28,33 @@ página que no está en caché se muestra un **spinner** mientras se baja.
 Ventajas: el diseño se edita en el servidor (React), no hay que recompilar el
 firmware para cambiar la UI, y se elimina toda la complejidad de LVGL.
 
-## Páginas
+## Navegación (desde v1.4.0)
 
-El servidor dibuja una **barra de pestañas** de 64 px en la franja inferior. El
-firmware mapea la X del toque a la pestaña y salta a esa página; la franja
-tocable es más alta que la barra visible (los últimos 110 px) para no fallar el
-toque.
+**El firmware no sabe qué páginas existen.** Con cada JPEG llega la cabecera
+`X-Kiosk-Nav` con los rectángulos tocables de esa pantalla y a dónde lleva cada uno:
 
-| Pestaña | Página          | URL del renderer        | Contenido                                                     |
-|---------|-----------------|-------------------------|---------------------------------------------------------------|
-| ☀️ Estación | 1           | `/kiosko?page=1`        | Temperatura grande, 6 tiles (humedad, presión, viento, lluvia, UV, IMECA) y pronóstico 6 h |
-| 📍 Local    | 2           | `/kiosko?page=2`        | Sensor BME280 de **este** display, con mín/máx                 |
-| 🏠 Sensores | 3           | `/kiosko?page=3`        | Sensores interior / jardín / estación remota (GW1100)          |
-| 📅 7 días   | 4           | `/kiosko?page=4`        | Pronóstico a 7 días                                            |
-| 📈 48 h     | 5           | `/kiosko?page=5`        | Resumen multivariable: temperatura, presión, lluvia, viento y humedad de las últimas 48 h |
-| 🖥️ Consola  | `consola`   | `/kiosko?page=consola`  | Réplica de la consola física Ecowitt, **pantalla completa sin barra** |
+```
+X-Kiosk-Nav: v=1;back=consola;ttl=900;z=0,537,171,63,det-rain-24h;z=171,537,171,63,det-rain-7d;…
+```
 
-El display **arranca en la consola** (`PAGE_HOME` en [`src/config.h`](src/config.h)):
-es la cara principal de la estación. Eso no cambia su lugar en la barra, sigue
-siendo la 6ª pestaña.
+El firmware sólo mira **en qué rectángulo cayó el toque** ([`src/nav.h`](src/nav.h)).
+Si no cayó en ninguno, retrocede: hay una pila de 8 niveles y, si está vacía, se usa
+el `back` que declara la propia página. También vuelve solo a la home tras unos
+minutos sin tocar (configurable en el portal, 0 = nunca).
 
-La consola es especial: al no tener barra de pestañas, un toque en **cualquier
-parte** regresa a la página 1. Su URL usa `?page=consola`, no un número.
+El display **arranca en la consola** (`PAGE_HOME` en [`src/config.h`](src/config.h)),
+que además hace de **índice**: cada celda suya lleva al detalle histórico de esa
+variable, y de ahí se llega a otros periodos y a los récords. El árbol lo define el
+servidor en `dashboard/src/kiosk-nav.ts`; añadir una pantalla es una fila ahí y
+desplegar — **sin tocar este firmware**.
 
-> El orden y el número de pestañas tienen que coincidir entre el array `TABS`
-> del dashboard y `NUM_TABS` / `PAGE_CONSOLA` en [`src/config.h`](src/config.h).
-> Si se agrega una página hay que tocar ambos lados.
+Antes el número de pestañas estaba cableado aquí y tenía que coincidir con el array
+`TABS` del dashboard, así que cada pantalla nueva obligaba a recompilar y reflashear.
+Ese contrato manual entre los dos repos ya no existe. Queda como **respaldo** el
+reparto por la X de la barra, que sólo entra si una respuesta llega sin la cabecera.
+
+Plan y formato completo: `docs/internal/PLAN-KIOSCO-NAVEGACION.md` en el repo del
+servidor.
 
 ## Hardware
 
@@ -125,6 +127,9 @@ Qué se puede configurar:
   Se intentan en orden 1 → 2 → 3
 - **URL del servidor**, con botón **Probar conexión** (código HTTP y ms) antes de
   guardar
+- **Vuelta automática a la consola** tras N minutos sin tocar la pantalla (`Nunca`,
+  o de 1 a 60). Un display de pared no debería quedarse toda la tarde con un
+  histórico viejo puesto
 - **Brillo** (1–10) e **intervalo de refresco** (1–15 min) — se aplican sin
   reiniciar
 - **BME280**: habilitado, intervalo de envío, **altitud del sitio** y **offsets de

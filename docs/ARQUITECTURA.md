@@ -85,15 +85,36 @@ Waveshare, sin placa en el entorno de desarrollo) ya se probó y quedó así:
    de Waveshare son correctos para este modelo. Lo que sí se bajó es el bounce
    buffer, a **3 líneas** (`H_RES*3`), que es lo que minimiza el desplazamiento.
 
+## Navegación por zonas (desde v1.4.0)
+
+El firmware **no sabe qué páginas existen**. Con cada JPEG llega la cabecera
+`X-Kiosk-Nav` con los rectángulos tocables de esa pantalla y a dónde lleva cada uno;
+`src/nav.h` la parsea y resuelve el toque. Si no cae en ninguna zona, retrocede (pila
+de 8 niveles; si está vacía, el `back` que declara la propia página).
+
+Antes el número de pestañas estaba en `config.h` y tenía que coincidir con el array
+`TABS` del dashboard, así que **cada pantalla nueva del servidor obligaba a
+reflashear**. Ese contrato manual entre los dos repos desapareció. Formato y detalle
+en `docs/internal/PLAN-KIOSCO-NAVEGACION.md` del repo del servidor.
+
+Queda como **respaldo** el reparto por la X de la barra de pestañas, que sólo entra
+si una respuesta llega sin la cabecera: así un despliegue a medias no deja el display
+sin navegación.
+
 ## Regla de coherencia de la caché de framebuffers
 
-`g_fbPage[]` dice qué página tiene cada framebuffer, y de ahí sale el "swap puro"
-al volver a una página. Por eso **todo lo que pinte algo que no sea una página
-(spinner, pantalla de info, pantalla de AP) tiene que invalidar esa entrada**
-(`FB_INVALID`, o `FB_SPINNER` si es el spinner). Si no, el firmware cree que ese
-framebuffer sigue teniendo una página válida y un cambio de pestaña lo presenta
-tal cual: se queda mostrando el spinner hasta el siguiente refresco por intervalo
-(hasta 15 min).
+`g_fbKey[]` dice qué página tiene cada framebuffer —el **hash del slug**, desde que
+las páginas se nombran en vez de numerarse— y de ahí sale el "swap puro" al volver a
+una página. Por eso **todo lo que pinte algo que no sea una página (spinner, pantalla
+de info, pantalla de AP) tiene que invalidar esa entrada** (`FB_INVALID`, o
+`FB_SPINNER` si es el spinner). Si no, el firmware cree que ese framebuffer sigue
+teniendo una página válida y un cambio de página lo presenta tal cual: se queda
+mostrando el spinner hasta el siguiente refresco por intervalo (hasta 15 min).
+
+Junto a cada framebuffer van además **el instante de su descarga y sus zonas**
+(`g_fbAt[]`, `g_fbNav[]`). Las zonas tienen que viajar con la imagen porque volver a
+una página cacheada es un swap puro, sin descarga: si el mapa fuera una variable
+global suelta, el toque se resolvería contra los rectángulos de otra pantalla.
 
 Los framebuffers los escribe **solo el netTask** (core 0), salvo el spinner
 inmediato del toque, que se pinta desde `loop()` (core 1) para que el
