@@ -37,14 +37,25 @@ inline void net_begin()
 }
 
 /**
- * Descarga /api/display.jpg?page=N al buffer interno.
- * @param page  numero de pagina (1..N)
- * @param out   se apunta al buffer interno con el JPEG
+ * Descarga /api/display.jpg?page=<slug> al buffer interno.
+ *
+ * @param page     slug de la pagina ("consola", "det-rain-7d", "3"...)
+ * @param out      se apunta al buffer interno con el JPEG
  * @param out_len  longitud descargada
+ * @param nav      (opcional) recibe la cabecera X-Kiosk-Nav, o cadena vacia si el
+ *                 servidor no la manda
+ * @param nav_max  tamaño del buffer de `nav`
  * @return true si HTTP 200 y cabe en el buffer.
+ *
+ * La pagina es una CADENA y no un numero desde que el servidor manda el arbol de
+ * navegacion: los slugs son "det-wind-7d" o "stats-mes". Mantener aqui una tabla de
+ * ids seria volver a tener dos listas que sincronizar entre los dos repos, que es
+ * justo lo que se quito.
  */
-inline bool net_fetch_display(int page, const uint8_t **out, size_t *out_len)
+inline bool net_fetch_display(const char *page, const uint8_t **out, size_t *out_len,
+                              char *nav = nullptr, size_t nav_max = 0)
 {
+    if (nav && nav_max) nav[0] = '\0';
     if (!_img_buf) return false;
     if (WiFi.status() != WL_CONNECTED && !wifi_config_reconnect()) {
         g_status.last_http = -1;      // sin WiFi
@@ -56,10 +67,7 @@ inline bool net_fetch_display(int page, const uint8_t **out, size_t *out_len)
     WiFiClient client;
 
     HTTPClient http;
-    // La consola es una página especial full-screen: URL ?page=consola. El resto
-    // son numéricas (?page=N).
-    String pageParam = (page == PAGE_CONSOLA) ? String("consola") : String(page);
-    String url = String(wifi_config_get_api_url()) + "/api/display.jpg?page=" + pageParam;
+    String url = String(wifi_config_get_api_url()) + "/api/display.jpg?page=" + String(page);
     if (!http.begin(client, url)) {
         Serial.println("[net] http.begin fallo");
         g_status.last_http = -2;      // URL invalida
@@ -68,6 +76,11 @@ inline bool net_fetch_display(int page, const uint8_t **out, size_t *out_len)
     }
     http.setTimeout(15000);
 
+    // HTTPClient DESCARTA las cabeceras de respuesta salvo las que se pidan antes
+    // del GET. Aqui llega el mapa de zonas tactiles de esta pagina.
+    static const char *CABECERAS[] = { "X-Kiosk-Nav" };
+    http.collectHeaders(CABECERAS, 1);
+
     int code = http.GET();
     g_status.last_http = code;
     if (code != HTTP_CODE_OK) {
@@ -75,6 +88,20 @@ inline bool net_fetch_display(int page, const uint8_t **out, size_t *out_len)
         http.end();
         g_status.last_ms = millis() - t0;
         return false;
+    }
+
+    // El mapa de zonas se copia ANTES de leer el cuerpo: http.end() libera las
+    // cabeceras y despues ya no se puede consultar.
+    if (nav && nav_max) {
+        String h = http.header("X-Kiosk-Nav");
+        strlcpy(nav, h.c_str(), nav_max);
+        if (h.length() >= nav_max) {
+            // Truncada: mejor quedarse sin zonas que con media lista, porque la
+            // ultima quedaria a medias y podria mandar a una pagina inexistente.
+            Serial.printf("[net] X-Kiosk-Nav de %u bytes no cabe en %u\n",
+                          (unsigned)h.length(), (unsigned)nav_max);
+            nav[0] = '\0';
+        }
     }
 
     int len = http.getSize();               // puede ser -1 (chunked)
@@ -115,7 +142,8 @@ inline bool net_fetch_display(int page, const uint8_t **out, size_t *out_len)
     g_status.last_ok_at = millis();
     *out = _img_buf;
     *out_len = total;
-    Serial.printf("[net] display.jpg page=%d: %u bytes\n", page, (unsigned)total);
+    Serial.printf("[net] display.jpg page=%s: %u bytes%s\n", page, (unsigned)total,
+                  (nav && nav[0]) ? " (con zonas)" : "");
     return true;
 }
 

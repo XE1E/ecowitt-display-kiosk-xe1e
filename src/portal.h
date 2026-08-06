@@ -162,7 +162,10 @@ input[type=file]{padding:7px}
 <input id="bright" type="range" min="1" max="10" oninput="document.getElementById('brv').textContent=this.value*10+'%'">
 <label>Intervalo de actualizaci&oacute;n</label>
 <select id="updmin"></select>
+<label>Volver solo a la consola</label>
+<select id="idlemin"></select>
 <div class="hint">El brillo se aplica al pintar la imagen (el backlight de esta placa no tiene PWM). Se ve al siguiente refresco.</div>
+<div class="hint">Si nadie toca la pantalla durante ese rato, vuelve sola a la consola. As&iacute; no se queda un hist&oacute;rico viejo puesto toda la tarde.</div>
 <div class="row"><button onclick="saveDisplay()">Guardar</button></div>
 <div class="msg" id="dmsg"></div>
 </section>
@@ -221,7 +224,7 @@ function loadStatus(){
     var http=s.http===0?'--':(s.http===200?'200 OK':String(s.http));
     var rows=[['Red',s.ap?'(modo AP)':s.ssid+'  '+s.rssi+' dBm'],
       ['IP',s.ip],['MAC',s.mac],['Encendido hace',s.up],['Firmware',s.fw],
-      ['Pagina mostrada',s.page?String(s.page):'--'],
+      ['Pagina mostrada',s.page?s.page:'--'],
       ['Ultimo GET',http+(s.ms?'  '+s.ms+' ms':'')+(s.bytes?'  '+s.bytes+' B':'')],
       ['Velocidad de bajada',(s.ms&&s.bytes)?(s.bytes/s.ms).toFixed(0)+' KB/s':'--'],
       ['Cambio de pagina',s.load?(s.load+' ms  =  red '+s.ms+' + decode '+s.dec+' + pintado '+s.pnt):'--'],
@@ -241,6 +244,10 @@ function loadSettings(){
     var sel=$('updmin');sel.innerHTML='';
     for(var i=1;i<=15;i++){var o=document.createElement('option');o.value=i;
       o.text=i+(i==1?' minuto':' minutos');if(i==c.upd)o.selected=true;sel.appendChild(o)}
+    var si=$('idlemin');si.innerHTML='';
+    [0,1,2,3,5,10,15,30,60].forEach(function(i){var o=document.createElement('option');
+      o.value=i;o.text=i?(i+(i==1?' minuto':' minutos')):'Nunca';
+      if(i==c.idle)o.selected=true;si.appendChild(o)});
     $('bmeen').value=c.bme?'1':'0';$('bmeint').value=c.bmeint;$('alt').value=c.alt;
     $('offt').value=c.offt;$('offh').value=c.offh;$('offp').value=c.offp;
   }).catch(function(){});
@@ -295,7 +302,7 @@ function test(){
 }
 
 function saveDisplay(){
-  var q='bright='+$('bright').value+'&upd='+$('updmin').value;
+  var q='bright='+$('bright').value+'&upd='+$('updmin').value+'&idle='+$('idlemin').value;
   post('/api/save/display',q).then(function(r){return r.text()}).then(function(){
     msg('dmsg','Guardado. Se aplica en el siguiente refresco.',true)
   }).catch(function(){msg('dmsg','Error al guardar',false)});
@@ -357,7 +364,9 @@ static void _h_status()
     j += ",\"mac\":\""; j += WiFi.macAddress(); j += "\"";
     j += ",\"up\":\"";  j += _uptime_str(); j += "\"";
     j += ",\"fw\":\"";  j += FW_VERSION; j += "\"";
-    j += ",\"page\":";  j += String(g_status.page);
+    // La pagina es un SLUG desde que el servidor manda el arbol de navegacion, asi
+    // que va ENTRECOMILLADA; antes era un numero y se serializaba pelada.
+    j += ",\"page\":\""; j += _json_escape(g_status.page); j += "\"";
     j += ",\"http\":";  j += String(g_status.last_http);
     j += ",\"ms\":";    j += String(g_status.last_ms);
     j += ",\"bytes\":"; j += String(g_status.last_bytes);
@@ -384,6 +393,7 @@ static void _h_settings()
     j += ",\"url\":\"";  j += _json_escape(g_set.api_url); j += "\"";
     j += ",\"bright\":"; j += String(g_set.brightness);
     j += ",\"upd\":";    j += String(g_set.update_min);
+    j += ",\"idle\":";   j += String(g_set.idle_home_min);
     j += ",\"bme\":";    j += g_set.bme_enabled ? "true" : "false";
     j += ",\"bmeint\":"; j += String(g_set.bme_interval);
     j += ",\"alt\":";    j += String(g_set.altitude);
@@ -505,6 +515,8 @@ static void _h_save_display()
     settings_load();
     g_set.brightness = _clamp_u8(_srv.arg("bright").toInt(), 1, 10);
     g_set.update_min = _clamp_u8(_srv.arg("upd").toInt(), 1, 15);
+    // 0 = no volver nunca, asi que el clamp arranca en 0 y no en 1.
+    g_set.idle_home_min = _clamp_u8(_srv.arg("idle").toInt(), 0, 60);
     settings_save_display();
     _srv.send(200, "text/plain", "OK");
     // Aplica en vivo (rehace las LUTs de brillo e invalida la cache de paginas).

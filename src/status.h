@@ -17,7 +17,11 @@ struct KioskStatus {
     volatile uint32_t last_bytes;     // tamaño del ultimo JPEG bajado
     volatile uint32_t last_ok_at;     // millis del ultimo GET correcto
     volatile int      post_http;      // codigo HTTP del ultimo POST del BME280
-    volatile int      page;           // pagina mostrada ahora
+    // Slug de la pagina mostrada ("consola", "det-rain-7d"...). Era un int cuando
+    // las paginas se numeraban; ahora las nombra el servidor. No es volatile: una
+    // cadena no se copia atomicamente y de todos modos esto es solo diagnostico
+    // --lo peor que puede pasar es que el portal lea un nombre a medio escribir--.
+    char              page[24];
     // Desglose de la ultima carga de pagina, para saber donde se va el tiempo que
     // dura el spinner: red (last_ms) + decode del JPEG + flush al panel.
     volatile uint32_t decode_ms;      // JPEGDEC sobre el framebuffer
@@ -25,7 +29,7 @@ struct KioskStatus {
     volatile uint32_t load_ms;        // total: fetch + decode + flush
 };
 
-static KioskStatus g_status = { 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static KioskStatus g_status = { 0, 0, 0, 0, 0, "", 0, 0, 0 };
 
 // Actualizacion OTA en curso: lo pone portal.h mientras recibe el .bin y lo lee
 // netTask para no bajar ni pintar paginas durante la escritura de la flash.

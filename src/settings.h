@@ -65,6 +65,7 @@ struct KioskSettings {
     char     api_url[128];
     uint8_t  brightness;      // 1..10
     uint8_t  update_min;      // 1..15
+    uint8_t  idle_home_min;   // 0..60 minutos sin tocar antes de volver a la home (0 = nunca)
     bool     bme_enabled;
     uint16_t bme_interval;    // segundos, 60..3600
     uint16_t altitude;        // metros del sitio, 0..6000 (0 = presion absoluta)
@@ -111,6 +112,8 @@ inline void settings_load()
 
     g_set.brightness   = _clamp_u8(p.getUChar("bright",  DEFAULT_BRIGHTNESS), 1, 10);
     g_set.update_min   = _clamp_u8(p.getUChar("upd_min",  DEFAULT_UPDATE_MIN), 1, 15);
+    // 0 es un valor VALIDO (nunca volver sola), asi que el clamp empieza en 0.
+    g_set.idle_home_min = _clamp_u8(p.getUChar("idle_min", IDLE_HOME_MIN), 0, 60);
     g_set.bme_enabled  = p.getBool("bme_en", BME280_ENABLED ? true : false);
     g_set.bme_interval = (uint16_t)constrain((long)p.getUShort("bme_int", REMOTE_STATION_INTERVAL), 60L, 3600L);
     g_set.altitude     = (uint16_t)constrain((long)p.getUShort("alt", BME280_ALTITUDE), 0L, 6000L);
@@ -155,9 +158,10 @@ inline void settings_save_display()
     p.begin(NVS_NAMESPACE, false);
     p.putUChar("bright",  g_set.brightness);
     p.putUChar("upd_min", g_set.update_min);
+    p.putUChar("idle_min", g_set.idle_home_min);
     p.end();
-    Serial.printf("[set] pantalla: brillo=%u intervalo=%u min\n",
-                  g_set.brightness, g_set.update_min);
+    Serial.printf("[set] pantalla: brillo=%u intervalo=%u min inactividad=%u min\n",
+                  g_set.brightness, g_set.update_min, g_set.idle_home_min);
 }
 
 inline void settings_save_sensor()

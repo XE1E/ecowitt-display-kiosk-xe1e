@@ -47,17 +47,27 @@
 // ============================================================================
 // Páginas del kiosco
 // ============================================================================
-// 5 páginas numeradas (con barra de pestañas que dibuja el servidor) + la
-// CONSOLA, que es full-screen SIN barra (id interno PAGE_CONSOLA, URL
-// ?page=consola). La barra muestra NUM_TABS pestañas: las 5 páginas + "Consola".
-#define NUM_TABS      6     // pestañas visibles en la barra (5 + Consola)
-#define PAGE_CONSOLA  6     // id interno de la consola (full-screen)
-#define MAX_PAGE_ID   6     // ids de página válidos: 1..MAX_PAGE_ID
-
+// El firmware YA NO SABE que paginas existen: las nombra el servidor con slugs
+// ("consola", "det-rain-7d", "stats-mes"...) y con cada imagen manda las zonas
+// tocables en la cabecera X-Kiosk-Nav. Ver src/nav.h y, en el repo del servidor,
+// docs/internal/PLAN-KIOSCO-NAVEGACION.md.
+//
 // Pagina con la que arranca el display. La consola es la cara principal de la
-// estacion, asi que el arranque va directo a ella; sigue siendo ademas la 6a
-// pestaña de la barra (esto NO cambia el orden ni el numero de pestañas).
-#define PAGE_HOME     PAGE_CONSOLA
+// estacion y ademas el INDICE: cada celda suya lleva al detalle de esa variable.
+#define PAGE_HOME     "consola"
+
+// Pestañas del RESPALDO. Solo se usa si una respuesta llega SIN mapa de zonas:
+// entonces se vuelve al reparto por la X de la barra inferior, que es como se
+// navegaba antes. Existe para no quedarse con un display muerto si un despliegue va
+// a medias o si alguna pantalla no publica zonas; en marcha normal no interviene.
+#define NUM_TABS      6
+
+// Vuelta automatica a la home tras N minutos sin tocar la pantalla (0 = nunca).
+// Un display de pared tiene que acabar siempre enseñando la consola: si alguien
+// deja abierto un historico de hace tres meses, lo que se ve desde el sofa deja de
+// ser el clima de ahora. Es el DEFAULT del primer arranque; el valor real vive en
+// NVS y se edita desde el portal.
+#define IDLE_HOME_MIN 5
 
 // ============================================================================
 // Estructura del sensor local (la usa bme280_sensor.h)
