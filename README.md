@@ -114,8 +114,20 @@ formas de llegar a ella:
 | Sin red guardada, o ninguna responde | El display abre el AP **"EcowittKiosk"** (sin contraseña). Al conectarte, el **portal cautivo se abre solo**; si no, ve a `http://192.168.4.1/` |
 | Ya conectado a tu red | `http://<IP-del-display>/` desde cualquier navegador de la LAN |
 
-Para ver la IP sin entrar al router: **toque largo (~2.5 s) fuera de la barra de
-pestañas** — muestra IP, SSID, señal y versión durante 15 s.
+Para ver la IP sin entrar al router hay **dos** caminos a la misma pantalla (IP, SSID,
+señal y versión, 15 s):
+
+- **Menú → INFO DEL DISPLAY**: toca el reloj de la consola y luego ese botón. Es la
+  vía descubrible; usa un slug **reservado** (`info`) que no existe en el servidor y
+  que reconoce este firmware para pintar su propia pantalla.
+- **Toque largo (~2.5 s) en cualquier parte**: el respaldo, y el que importa cuando el
+  display no llega al servidor — porque entonces no hay menú al que ir.
+
+> El toque largo estuvo roto en la v1.4.0: se medía sólo en los huecos que no
+> navegaban y, con el mapa de zonas, todo toque pasó a tener destino (si no cae en un
+> botón, retrocede), así que no quedaba ningún hueco. Desde la v1.4.1 la navegación se
+> resuelve **al soltar**, que es el patrón clásico tap/long-press y devuelve el gesto a
+> toda la pantalla. Un tap normal dura ~100 ms, así que no se nota.
 
 Qué se puede configurar:
 

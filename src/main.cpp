@@ -507,12 +507,25 @@ void setup()
     xSemaphoreGive(g_wake);   // primer render inmediato
 }
 
-// Toque largo: millis del inicio de un toque fuera de la barra (0 = ninguno).
+/**
+ * Toque en curso: millis en que empezo (0 = ninguno) y donde cayo.
+ *
+ * La navegacion se resuelve al SOLTAR, no al tocar. Antes se resolvia al tocar y el
+ * toque largo se medía sólo en los huecos que no navegaban; desde que el servidor
+ * manda el mapa de zonas, TODO toque tiene destino --si no cae en un boton,
+ * retrocede-- asi que no quedaba ningun hueco donde medir el gesto y la pantalla de
+ * info se volvio inalcanzable. Con la decision al soltar, el toque largo vuelve a
+ * funcionar EN TODA la pantalla y un tap normal (~100 ms) se siente igual.
+ */
 static uint32_t g_press_start = 0;
+static uint16_t g_press_x = 0, g_press_y = 0;
 static const uint32_t LONG_PRESS_MS = 2500;
 
 // Ultimo toque, para la vuelta automatica a la home por inactividad.
 static uint32_t g_last_touch = 0;
+
+/** Resuelve un toque ya confirmado como tap (definida despues de loop). */
+static void navegar(uint16_t tx, uint16_t ty);
 
 void loop()
 {
@@ -524,7 +537,6 @@ void loop()
     xSemaphoreGive(g_i2c);
 
     if (tapped) {
-        char destino[NAV_SLUG_MAX] = "";
         g_last_touch = millis();
 
         // Pantalla de info en pantalla: cualquier toque la baja (es lo que dice
@@ -535,6 +547,62 @@ void loop()
         // ya no estan donde el dedo cree. Se ignora el toque en vez de resolverlo
         // contra un mapa que no corresponde a lo que hay en pantalla.
         if (g_fbKey[g_shownFb] == FB_SPINNER) return;
+
+        // Se ANOTA el toque y se decide al soltar: si el dedo sigue ahi a los 2.5 s
+        // es un toque largo (pantalla de info) y no una navegacion.
+        g_press_start = millis();
+        g_press_x = tx;
+        g_press_y = ty;
+    }
+
+    // ── Resolver el toque: largo mientras se sostiene, navegacion al soltar ──
+    if (g_press_start) {
+        if (millis() - g_press_start >= LONG_PRESS_MS) {
+            // Toque largo EN CUALQUIER PARTE: pantalla con la IP y la URL del
+            // portal. Sin esto no hay forma de averiguar la IP del display --y por
+            // tanto de llegar a la configuracion-- sin entrar al router.
+            g_press_start = 0;
+            Serial.println("[touch] toque largo -> pantalla de info");
+            g_info_request = true;
+            xSemaphoreGive(g_wake);
+        } else if (!touch_input_down()) {
+            // Se solto antes: era un tap, asi que ahora si se navega.
+            uint16_t tx2 = g_press_x, ty2 = g_press_y;
+            g_press_start = 0;
+            navegar(tx2, ty2);
+        }
+    }
+
+    // Vuelta automatica a la home tras un rato sin tocar nada. Un display de pared
+    // acaba siempre enseñando la consola: si alguien deja abierto un historico de
+    // hace tres meses, lo que se ve desde el sofa deja de ser el clima de ahora.
+    // Se limpia la pila: no tendria sentido "volver atras" a donde estabas hace una
+    // hora. Con 0 minutos no vuelve nunca (se queda donde lo dejaron).
+    if (g_set.idle_home_min && g_last_touch &&
+        millis() - g_last_touch >= (uint32_t)g_set.idle_home_min * 60000UL) {
+        g_last_touch = 0;
+        xSemaphoreTake(g_navmux, portMAX_DELAY);
+        bool vuelve = strcmp(g_page, PAGE_HOME) != 0;
+        if (vuelve) {
+            strlcpy(g_page, PAGE_HOME, sizeof(g_page));
+            g_pila.n = 0;
+        }
+        xSemaphoreGive(g_navmux);
+        if (vuelve) {
+            Serial.printf("[nav] %u min sin tocar -> %s\n", g_set.idle_home_min, PAGE_HOME);
+            xSemaphoreGive(g_wake);
+        }
+    }
+
+    // Atender la página de configuración (puerto 80 en la IP de la LAN).
+    portal_handle();
+    delay(5);
+}
+
+/** Resuelve un toque ya confirmado como tap: a donde lleva y hacia alla. */
+static void navegar(uint16_t tx, uint16_t ty)
+{
+        char destino[NAV_SLUG_MAX] = "";
 
         // El mapa de la pagina que se esta VIENDO, no el de la ultima descargada:
         // al volver atras con un swap puro no hay descarga.
@@ -574,7 +642,19 @@ void loop()
             Serial.printf("[touch] tab x=%u y=%u -> %s (sin mapa)\n", tx, ty, destino);
         } else {
             Serial.printf("[touch] x=%u y=%u (sin mapa, fuera de la barra)\n", tx, ty);
-            g_press_start = millis();
+        }
+
+        // "info" es un slug RESERVADO: no existe en el servidor, lo pinta el propio
+        // firmware con los datos que sólo él tiene (IP, SSID, señal, version). Asi
+        // la pantalla de diagnostico se alcanza desde el menu como cualquier otra,
+        // sin depender de acordarse de un gesto. El toque largo sigue existiendo
+        // como respaldo: si el display no llega al servidor no hay menu al que ir.
+        if (!strcmp(destino, "info")) {
+            xSemaphoreGive(g_navmux);
+            Serial.println("[touch] -> pantalla de info (slug reservado)");
+            g_info_request = true;
+            xSemaphoreGive(g_wake);
+            return;
         }
 
         bool cambia = destino[0] && strcmp(destino, g_page);
@@ -593,44 +673,4 @@ void loop()
             }
             xSemaphoreGive(g_wake);
         }
-    }
-
-    // Vuelta automatica a la home tras un rato sin tocar nada. Un display de pared
-    // acaba siempre enseñando la consola: si alguien deja abierto un historico de
-    // hace tres meses, lo que se ve desde el sofa deja de ser el clima de ahora.
-    // Se limpia la pila: no tendria sentido "volver atras" a donde estabas hace una
-    // hora. Con 0 minutos no vuelve nunca (se queda donde lo dejaron).
-    if (g_set.idle_home_min && g_last_touch &&
-        millis() - g_last_touch >= (uint32_t)g_set.idle_home_min * 60000UL) {
-        g_last_touch = 0;
-        xSemaphoreTake(g_navmux, portMAX_DELAY);
-        bool vuelve = strcmp(g_page, PAGE_HOME) != 0;
-        if (vuelve) {
-            strlcpy(g_page, PAGE_HOME, sizeof(g_page));
-            g_pila.n = 0;
-        }
-        xSemaphoreGive(g_navmux);
-        if (vuelve) {
-            Serial.printf("[nav] %u min sin tocar -> %s\n", g_set.idle_home_min, PAGE_HOME);
-            xSemaphoreGive(g_wake);
-        }
-    }
-
-    // Toque largo (>= 2.5 s) fuera de la barra: pantalla con la IP y la URL del
-    // portal. Sin esto no hay forma de averiguar la IP del display (y por tanto
-    // de llegar a la configuración) sin entrar al router.
-    if (g_press_start) {
-        if (!touch_input_down()) {
-            g_press_start = 0;                      // se soltó antes: era un tap
-        } else if (millis() - g_press_start >= LONG_PRESS_MS) {
-            g_press_start = 0;
-            Serial.println("[touch] toque largo -> pantalla de info");
-            g_info_request = true;
-            xSemaphoreGive(g_wake);
-        }
-    }
-
-    // Atender la página de configuración (puerto 80 en la IP de la LAN).
-    portal_handle();
-    delay(5);
 }

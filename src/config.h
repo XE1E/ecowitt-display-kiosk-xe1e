@@ -19,7 +19,9 @@
 // Version del firmware (se muestra en el bloque "Estado" del portal web).
 // 1.4.0: navegacion por zonas (X-Kiosk-Nav). Cambia el modelo de pagina de numero a
 // slug, asi que no es un parche: sube la minor.
-#define FW_VERSION "1.4.0"
+// 1.4.1: el toque largo volvia a ser inalcanzable con el mapa de zonas; ahora la
+// navegacion se resuelve al SOLTAR y el gesto funciona en toda la pantalla.
+#define FW_VERSION "1.4.1"
 
 // ============================================================================
 // I2C (bus compartido: CH422G + GT911 + BME280)
